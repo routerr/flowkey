@@ -1,0 +1,32 @@
+[workspace]
+members = [
+    "crates/kms-cli",
+    "crates/kms-core",
+    "crates/kms-config",
+    "crates/kms-crypto",
+    "crates/kms-net",
+    "crates/kms-protocol",
+    "crates/kms-daemon",
+    "crates/kms-input",
+    "crates/kms-platform-macos",
+    "crates/kms-platform-windows",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+authors = ["Ray Chang"]
+
+[workspace.dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

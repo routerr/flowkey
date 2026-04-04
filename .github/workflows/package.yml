@@ -1,0 +1,62 @@
+name: package
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test
+
+  package:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            script: scripts/package-linux.sh
+            artifact: kms-linux-amd64
+            shell: bash
+          - runner: macos-latest
+            script: scripts/package-macos.sh
+            artifact: kms-macos-amd64
+            shell: bash
+          - runner: windows-latest
+            script: scripts/package-windows.ps1
+            artifact: kms-windows-amd64
+            shell: pwsh
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release bundle
+        shell: ${{ matrix.shell }}
+        run: ${{ matrix.script }}
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.dmg
+            dist/*.dmg.sha256
+            dist/*.zip
+            dist/*.zip.sha256
