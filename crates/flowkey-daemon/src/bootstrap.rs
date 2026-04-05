@@ -18,6 +18,7 @@ use flowkey_input::loopback::{LoopbackSuppressor, SharedLoopbackSuppressor};
 use flowkey_input::InputEventSink;
 use flowkey_net::connection::{
     connect_and_authenticate, run_authenticated_session, session_channel, SessionSender,
+    SessionStateCallback,
 };
 use flowkey_net::discovery::DiscoveryAdvertisement;
 use flowkey_net::heartbeat::HeartbeatConfig;
@@ -82,6 +83,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
     );
     spawn_control_watcher(
         Arc::clone(&runtime),
+        Arc::clone(&session_senders),
         control_path.clone(),
         status_path.clone(),
     );
@@ -132,11 +134,16 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                             }
                         }
                         persist_status_snapshot(&runtime, &status_path);
+                        let callback = DaemonSessionCallback {
+                            runtime: Arc::clone(&runtime),
+                            status_path: status_path.clone(),
+                        };
                         if let Err(error) = run_authenticated_session(
                             connection,
                             HeartbeatConfig::default(),
                             sink.as_mut(),
                             receiver,
+                            &callback,
                         )
                         .await
                         {
@@ -163,23 +170,12 @@ pub async fn run_daemon(config: Config) -> Result<()> {
     let outbound_senders = Arc::clone(&session_senders);
     let outbound_loopback = Arc::clone(&loopback);
     let outbound_status_path = status_path.clone();
-    let outbound_peers: Vec<_> = outbound_config
+    let outbound_tasks: Vec<_> = outbound_config
         .peers
         .iter()
         .filter(|peer| peer.trusted)
         .filter(|peer| peer.id > outbound_config.node.id)
         .cloned()
-        .collect();
-    info!(
-        count = outbound_peers.len(),
-        node_id = %outbound_config.node.id,
-        "outbound peer candidates"
-    );
-    for peer in &outbound_peers {
-        info!(peer_id = %peer.id, addr = %peer.addr, "will connect outbound");
-    }
-    let outbound_tasks: Vec<_> = outbound_peers
-        .into_iter()
         .map(|peer| {
             let config = outbound_config.clone();
             let runtime = Arc::clone(&outbound_runtime);
@@ -217,11 +213,16 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                                 }
                             }
                             persist_status_snapshot(&runtime, &status_path);
+                            let callback = DaemonSessionCallback {
+                                runtime: Arc::clone(&runtime),
+                                status_path: status_path.clone(),
+                            };
                             if let Err(error) = run_authenticated_session(
                                 connection,
                                 HeartbeatConfig::default(),
                                 sink.as_mut(),
                                 receiver,
+                                &callback,
                             )
                             .await
                             {
@@ -336,6 +337,17 @@ fn spawn_hotkey_watcher(
                     match result {
                         Ok((state, peer)) => {
                             persist_status_snapshot(&runtime, &status_path);
+                            if let Some(ref peer_id) = peer {
+                                match &state {
+                                    DaemonState::Controlling { .. } => {
+                                        notify_peer_switch(peer_id, &session_senders);
+                                    }
+                                    DaemonState::ConnectedIdle => {
+                                        notify_peer_release(peer_id, &session_senders);
+                                    }
+                                    _ => {}
+                                }
+                            }
                             info!(state = ?state, peer = ?peer, "hotkey switched daemon role");
                         }
                         Err(error) => {
@@ -399,6 +411,7 @@ fn spawn_hotkey_watcher(
 
 fn spawn_control_watcher(
     runtime: Arc<Mutex<DaemonRuntime>>,
+    session_senders: Arc<Mutex<HashMap<String, SessionSender>>>,
     control_path: PathBuf,
     status_path: PathBuf,
 ) {
@@ -418,7 +431,7 @@ fn spawn_control_watcher(
             }
         };
 
-        match handle_control_command(command, &runtime, &status_path) {
+        match handle_control_command(command, &runtime, &session_senders, &status_path) {
             Ok(()) => {
                 let _ = fs::remove_file(&control_path);
             }
@@ -435,6 +448,7 @@ fn spawn_control_watcher(
 fn handle_control_command(
     command: DaemonCommand,
     runtime: &Arc<Mutex<DaemonRuntime>>,
+    session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
     status_path: &std::path::Path,
 ) -> Result<(), String> {
     match command {
@@ -458,6 +472,7 @@ fn handle_control_command(
                 (runtime.state.clone(), runtime.active_peer_id.clone())
             };
             persist_status_snapshot(runtime, status_path);
+            notify_peer_switch(&peer_id, session_senders);
             info!(
                 request = "switch",
                 peer = %peer_id,
@@ -468,21 +483,140 @@ fn handle_control_command(
             Ok(())
         }
         DaemonCommand::Release => {
-            let (state, peer) = {
+            let active_peer = {
+                let runtime = runtime
+                    .lock()
+                    .expect("daemon runtime mutex should not be poisoned");
+                runtime.active_peer_id.clone()
+            };
+            {
                 let mut runtime = runtime
                     .lock()
                     .expect("daemon runtime mutex should not be poisoned");
                 runtime.release_control()?;
-                (runtime.state.clone(), runtime.active_peer_id.clone())
-            };
+            }
             persist_status_snapshot(runtime, status_path);
+            if let Some(peer_id) = &active_peer {
+                notify_peer_release(peer_id, session_senders);
+            }
+            let state = runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned")
+                .state
+                .clone();
             info!(
                 request = "release",
                 state = ?state,
-                active_peer = ?peer,
+                active_peer = ?active_peer,
                 "daemon control request applied"
             );
             Ok(())
+        }
+    }
+}
+
+fn notify_peer_switch(
+    peer_id: &str,
+    session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
+) {
+    let request_id = generate_request_id();
+    let sender = session_senders
+        .lock()
+        .expect("session sender registry should not be poisoned")
+        .get(peer_id)
+        .cloned();
+    if let Some(sender) = sender {
+        if let Err(error) = sender.send_switch(request_id) {
+            warn!(peer = %peer_id, %error, "failed to send switch request to peer");
+        }
+    }
+}
+
+fn notify_peer_release(
+    peer_id: &str,
+    session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
+) {
+    let request_id = generate_request_id();
+    let sender = session_senders
+        .lock()
+        .expect("session sender registry should not be poisoned")
+        .get(peer_id)
+        .cloned();
+    if let Some(sender) = sender {
+        if let Err(error) = sender.send_release(request_id) {
+            warn!(peer = %peer_id, %error, "failed to send release request to peer");
+        }
+    }
+}
+
+fn generate_request_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("req-{ts}")
+}
+
+struct DaemonSessionCallback {
+    runtime: Arc<Mutex<DaemonRuntime>>,
+    status_path: PathBuf,
+}
+
+impl SessionStateCallback for DaemonSessionCallback {
+    fn on_remote_switch(&self, peer_id: &str, request_id: &str) {
+        let result = {
+            let mut runtime = self
+                .runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned");
+            runtime.mark_controlled_by(peer_id)
+        };
+        match result {
+            Ok(()) => {
+                persist_status_snapshot(&self.runtime, &self.status_path);
+                info!(
+                    peer = %peer_id,
+                    request = %request_id,
+                    "transitioned to controlled-by via remote switch"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    peer = %peer_id,
+                    request = %request_id,
+                    %error,
+                    "failed to apply remote switch"
+                );
+            }
+        }
+    }
+
+    fn on_remote_release(&self, peer_id: &str, request_id: &str) {
+        let result = {
+            let mut runtime = self
+                .runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned");
+            runtime.release_control()
+        };
+        match result {
+            Ok(()) => {
+                persist_status_snapshot(&self.runtime, &self.status_path);
+                info!(
+                    peer = %peer_id,
+                    request = %request_id,
+                    "transitioned to connected-idle via remote release"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    peer = %peer_id,
+                    request = %request_id,
+                    %error,
+                    "failed to apply remote release"
+                );
+            }
         }
     }
 }

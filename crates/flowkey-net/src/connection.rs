@@ -33,19 +33,38 @@ impl AuthenticatedConnection {
 }
 
 #[derive(Debug, Clone)]
+pub enum SessionCommand {
+    Input(InputEvent),
+    SwitchControl { request_id: String },
+    ReleaseControl { request_id: String },
+}
+
+#[derive(Debug, Clone)]
 pub struct SessionSender {
-    sender: UnboundedSender<InputEvent>,
+    sender: UnboundedSender<SessionCommand>,
 }
 
 impl SessionSender {
     pub fn send_input(&self, event: InputEvent) -> Result<(), String> {
         self.sender
-            .send(event)
+            .send(SessionCommand::Input(event))
+            .map_err(|_| "session command channel closed".to_string())
+    }
+
+    pub fn send_switch(&self, request_id: String) -> Result<(), String> {
+        self.sender
+            .send(SessionCommand::SwitchControl { request_id })
+            .map_err(|_| "session command channel closed".to_string())
+    }
+
+    pub fn send_release(&self, request_id: String) -> Result<(), String> {
+        self.sender
+            .send(SessionCommand::ReleaseControl { request_id })
             .map_err(|_| "session command channel closed".to_string())
     }
 }
 
-pub fn session_channel() -> (SessionSender, UnboundedReceiver<InputEvent>) {
+pub fn session_channel() -> (SessionSender, UnboundedReceiver<SessionCommand>) {
     let (sender, receiver) = unbounded_channel();
     (SessionSender { sender }, receiver)
 }
@@ -320,11 +339,18 @@ pub async fn accept_and_authenticate(
     authenticate_incoming_stream(config, stream).await
 }
 
+/// Callback for handling remote switch/release requests received during a session.
+pub trait SessionStateCallback: Send + Sync {
+    fn on_remote_switch(&self, peer_id: &str, request_id: &str);
+    fn on_remote_release(&self, peer_id: &str, request_id: &str);
+}
+
 pub async fn run_authenticated_session(
     mut connection: AuthenticatedConnection,
     heartbeat: HeartbeatConfig,
     sink: &mut dyn flowkey_input::InputEventSink,
-    mut outbound: UnboundedReceiver<InputEvent>,
+    mut outbound: UnboundedReceiver<SessionCommand>,
+    state_callback: &dyn SessionStateCallback,
 ) -> Result<()> {
     let mut ticker = interval(Duration::from_secs(heartbeat.interval_secs));
     let mut outbound_open = true;
@@ -338,11 +364,20 @@ pub async fn run_authenticated_session(
             _ = ticker.tick() => {
                 write_message(stream, &Message::Heartbeat).await?;
             }
-            maybe_event = outbound.recv(), if outbound_open => {
-                match maybe_event {
-                    Some(event) => {
+            maybe_command = outbound.recv(), if outbound_open => {
+                match maybe_command {
+                    Some(SessionCommand::Input(event)) => {
                         sequence = sequence.wrapping_add(1);
                         write_message(stream, &Message::InputEvent { sequence, event }).await?;
+                    }
+                    Some(SessionCommand::SwitchControl { request_id }) => {
+                        write_message(stream, &Message::SwitchRequest {
+                            peer_id: peer_id.clone(),
+                            request_id,
+                        }).await?;
+                    }
+                    Some(SessionCommand::ReleaseControl { request_id }) => {
+                        write_message(stream, &Message::SwitchRelease { request_id }).await?;
                     }
                     None => {
                         outbound_open = false;
@@ -367,11 +402,13 @@ pub async fn run_authenticated_session(
                             warn!(peer = %peer_id, %error, "input injection failed, continuing session");
                         }
                     }
-                    Message::SwitchRequest { peer_id, request_id } => {
-                        warn!(peer = %peer_id, request = %request_id, "switch request received but not yet handled");
+                    Message::SwitchRequest { peer_id: remote_peer, request_id } => {
+                        info!(peer = %remote_peer, request = %request_id, "remote peer took control");
+                        state_callback.on_remote_switch(&remote_peer, &request_id);
                     }
                     Message::SwitchRelease { request_id } => {
-                        warn!(request = %request_id, "switch release received but not yet handled");
+                        info!(peer = %peer_id, request = %request_id, "remote peer released control");
+                        state_callback.on_remote_release(&peer_id, &request_id);
                     }
                     Message::Error { code, message } => {
                         return Err(anyhow!("peer error {}: {}", code, message));
@@ -583,8 +620,15 @@ mod tests {
         };
         let (sender, receiver) = session_channel();
 
+        struct NoopCallback;
+        impl super::SessionStateCallback for NoopCallback {
+            fn on_remote_switch(&self, _peer_id: &str, _request_id: &str) {}
+            fn on_remote_release(&self, _peer_id: &str, _request_id: &str) {}
+        }
+
         let session = tokio::spawn(async move {
             let mut sink = NoopSink;
+            let callback = NoopCallback;
             run_authenticated_session(
                 connection,
                 super::HeartbeatConfig {
@@ -593,6 +637,7 @@ mod tests {
                 },
                 &mut sink,
                 receiver,
+                &callback,
             )
             .await
         });
