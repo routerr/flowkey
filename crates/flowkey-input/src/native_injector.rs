@@ -1,7 +1,18 @@
 use std::collections::HashSet;
 
-use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+#[cfg(not(target_os = "macos"))]
+use enigo::Coordinate;
 use tracing::warn;
+
+#[cfg(target_os = "macos")]
+use core_graphics::display::CGDisplay;
+#[cfg(target_os = "macos")]
+use core_graphics::event::CGEvent;
+#[cfg(target_os = "macos")]
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+#[cfg(target_os = "macos")]
+use core_graphics::geometry::CGPoint;
 
 use crate::event::{InputEvent, Modifiers, MouseButton};
 use crate::inject::InputInjector;
@@ -51,10 +62,7 @@ impl NativeInputSink {
                 self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
                 self.key_action(key_code, Direction::Release)
             }
-            InputEvent::MouseMove { dx, dy } => self
-                .enigo
-                .move_mouse(*dx, *dy, Coordinate::Rel)
-                .map_err(|error| error.to_string()),
+            InputEvent::MouseMove { dx, dy } => self.move_mouse(*dx, *dy),
             InputEvent::MouseButtonDown { button } => self.button_action(*button, Direction::Press),
             InputEvent::MouseButtonUp { button } => self.button_action(*button, Direction::Release),
             InputEvent::MouseWheel { delta_x, delta_y } => {
@@ -128,6 +136,31 @@ impl NativeInputSink {
         }
 
         Ok(())
+    }
+
+    fn move_mouse(&mut self, dx: i32, dy: i32) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            return self.move_mouse_macos(dx, dy);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.enigo
+                .move_mouse(dx, dy, Coordinate::Rel)
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn move_mouse_macos(&mut self, dx: i32, dy: i32) -> Result<(), String> {
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| "failed to create macOS event source".to_string())?;
+        let event =
+            CGEvent::new(source).map_err(|_| "failed to read macOS mouse location".to_string())?;
+        let current = event.location();
+        let target = CGPoint::new(current.x + f64::from(dx), current.y + f64::from(dy));
+        CGDisplay::warp_mouse_cursor_position(target).map_err(|error| format!("{error:?}"))
     }
 
     fn key_action(&mut self, key_code: KeyCode, direction: Direction) -> Result<(), String> {
