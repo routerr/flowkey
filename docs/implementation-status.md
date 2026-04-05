@@ -33,7 +33,7 @@
 - disconnect cleanup
 - reconnect/session resume policy
 - native installers and code signing
-- SwitchRequest/SwitchRelease protocol messages (defined but not sent or handled)
+- graceful degradation when rdev/enigo are unavailable in non-interactive sessions
 
 ## Not Started
 
@@ -44,24 +44,23 @@
 ## Verified
 
 - `cargo build` (macOS and Windows)
-- `cargo test` (14 tests pass)
+- `cargo test` (60 tests pass in the current workspace)
 - cross-platform pairing flow (macOS <-> Windows via Tailscale)
 - authenticated TCP session establishment (macOS <-> Windows)
 - input event capture, serialization, and remote delivery
+- local and remote SwitchRequest/SwitchRelease state propagation in code path and unit coverage
 - see [cross-platform-test-report.md](./cross-platform-test-report.md) for full results
 
 ## Known Issues
 
 1. Windows input injection blocked by UIPI when daemon runs outside interactive desktop session
-2. SwitchRequest/SwitchRelease not sent to remote peer on state change
-3. `pair init` advertised address may be unreachable across subnets
-4. Windows firewall blocks port 48571 by default
-5. macOS requires manual Accessibility permission grant for input injection
-6. Duplicate diagnostic notes accumulate on session reconnect
+2. `pair init` advertised address may still be unreachable across subnets unless the user sets `node.advertised_addr` or passes `--advertised-addr`
+3. Windows firewall blocks port 48571 by default
+4. macOS requires manual Accessibility permission grant for input injection
 
 ## Recommended Next Steps
 
-1. Implement SwitchRequest/SwitchRelease send and receive handling
-2. Document Windows UIPI requirement and firewall setup
-3. Add advertised address override for cross-subnet pairing
-4. Add native installers and platform-specific UX polish
+1. Re-run an interactive macOS <-> Windows validation pass using the new pairing override path
+2. Document Windows UIPI requirement and firewall setup with exact operator steps
+3. Add native installers and platform-specific UX polish
+4. Consider privilege/session detection before starting capture hooks on Windows

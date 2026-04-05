@@ -57,6 +57,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
     println!("hotkey: {}", config.switch.hotkey);
     println!("trusted peers: {}", config.peers.len());
     persist_status_snapshot(&runtime, &status_path);
+    print_runtime_notes(&runtime);
 
     let hotkey_binding = match HotkeyBinding::parse(&config.switch.hotkey) {
         Ok(binding) => binding,
@@ -117,12 +118,20 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                             .expect("daemon runtime mutex should not be poisoned")
                             .mark_authenticated(peer_id.clone());
                         let (sender, receiver) = session_channel();
-                        session_senders
-                            .lock()
-                            .expect("session sender registry should not be poisoned")
-                            .insert(peer_id.clone(), sender);
+                        let sender_count = {
+                            let mut senders = session_senders
+                                .lock()
+                                .expect("session sender registry should not be poisoned");
+                            senders.insert(peer_id.clone(), sender);
+                            senders.len()
+                        };
                         persist_status_snapshot(&runtime, &status_path);
-                        info!(peer = %peer_id, remote = %addr, "incoming session authenticated");
+                        info!(
+                            peer = %peer_id,
+                            remote = %addr,
+                            sender_count,
+                            "incoming session authenticated and sender registered"
+                        );
                         let (mut sink, backend, note) = create_platform_input_sink(loopback);
                         {
                             let mut runtime = runtime
@@ -130,7 +139,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                                 .expect("daemon runtime mutex should not be poisoned");
                             runtime.diagnostics.input_injection_backend = backend.to_string();
                             if let Some(note) = note {
-                                runtime.diagnostics.notes.push(note);
+                                push_runtime_note(&mut runtime, note);
                             }
                         }
                         persist_status_snapshot(&runtime, &status_path);
@@ -140,6 +149,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                         };
                         if let Err(error) = run_authenticated_session(
                             connection,
+                            &config.node.id,
                             HeartbeatConfig::default(),
                             sink.as_mut(),
                             receiver,
@@ -195,12 +205,19 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                                 .expect("daemon runtime mutex should not be poisoned")
                                 .mark_authenticated(peer_id.clone());
                             let (sender, receiver) = session_channel();
-                            session_senders
-                                .lock()
-                                .expect("session sender registry should not be poisoned")
-                                .insert(peer_id.clone(), sender);
+                            let sender_count = {
+                                let mut senders = session_senders
+                                    .lock()
+                                    .expect("session sender registry should not be poisoned");
+                                senders.insert(peer_id.clone(), sender);
+                                senders.len()
+                            };
                             persist_status_snapshot(&runtime, &status_path);
-                            info!(peer = %peer_id, "outbound session authenticated");
+                            info!(
+                                peer = %peer_id,
+                                sender_count,
+                                "outbound session authenticated and sender registered"
+                            );
                             let (mut sink, backend, note) =
                                 create_platform_input_sink(Arc::clone(&loopback));
                             {
@@ -209,7 +226,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                                     .expect("daemon runtime mutex should not be poisoned");
                                 runtime.diagnostics.input_injection_backend = backend.to_string();
                                 if let Some(note) = note {
-                                    runtime.diagnostics.notes.push(note);
+                                    push_runtime_note(&mut runtime, note);
                                 }
                             }
                             persist_status_snapshot(&runtime, &status_path);
@@ -219,6 +236,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                             };
                             if let Err(error) = run_authenticated_session(
                                 connection,
+                                &config.node.id,
                                 HeartbeatConfig::default(),
                                 sink.as_mut(),
                                 receiver,
@@ -299,10 +317,10 @@ fn spawn_hotkey_watcher(
                     .lock()
                     .expect("daemon runtime mutex should not be poisoned");
                 runtime.diagnostics.local_capture_enabled = false;
-                runtime
-                    .diagnostics
-                    .notes
-                    .push(format!("local hotkey listener disabled: {error}"));
+                push_runtime_note(
+                    &mut runtime,
+                    format!("local hotkey listener disabled: {error}"),
+                );
             }
             persist_status_snapshot(&runtime, &status_path);
             warn!(%error, "failed to start local hotkey listener");
@@ -515,20 +533,37 @@ fn handle_control_command(
     }
 }
 
-fn notify_peer_switch(
-    peer_id: &str,
-    session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
-) {
+fn notify_peer_switch(peer_id: &str, session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>) {
     let request_id = generate_request_id();
-    let sender = session_senders
-        .lock()
-        .expect("session sender registry should not be poisoned")
-        .get(peer_id)
-        .cloned();
+    let request_label = request_id.clone();
+    let (sender, sender_count, connected_peers) = {
+        let senders = session_senders
+            .lock()
+            .expect("session sender registry should not be poisoned");
+        let peers = senders.keys().cloned().collect::<Vec<_>>();
+        (senders.get(peer_id).cloned(), senders.len(), peers)
+    };
     if let Some(sender) = sender {
+        info!(
+            peer = %peer_id,
+            request = %request_id,
+            sender_count,
+            connected_peers = ?connected_peers,
+            "queueing switch request for peer session"
+        );
         if let Err(error) = sender.send_switch(request_id) {
             warn!(peer = %peer_id, %error, "failed to send switch request to peer");
+        } else {
+            info!(peer = %peer_id, request = %request_label, "switch request queued onto session channel");
         }
+    } else {
+        warn!(
+            peer = %peer_id,
+            request = %request_label,
+            sender_count,
+            connected_peers = ?connected_peers,
+            "no session sender registered for switch request"
+        );
     }
 }
 
@@ -537,15 +572,35 @@ fn notify_peer_release(
     session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
 ) {
     let request_id = generate_request_id();
-    let sender = session_senders
-        .lock()
-        .expect("session sender registry should not be poisoned")
-        .get(peer_id)
-        .cloned();
+    let request_label = request_id.clone();
+    let (sender, sender_count, connected_peers) = {
+        let senders = session_senders
+            .lock()
+            .expect("session sender registry should not be poisoned");
+        let peers = senders.keys().cloned().collect::<Vec<_>>();
+        (senders.get(peer_id).cloned(), senders.len(), peers)
+    };
     if let Some(sender) = sender {
+        info!(
+            peer = %peer_id,
+            request = %request_id,
+            sender_count,
+            connected_peers = ?connected_peers,
+            "queueing release request for peer session"
+        );
         if let Err(error) = sender.send_release(request_id) {
             warn!(peer = %peer_id, %error, "failed to send release request to peer");
+        } else {
+            info!(peer = %peer_id, request = %request_label, "release request queued onto session channel");
         }
+    } else {
+        warn!(
+            peer = %peer_id,
+            request = %request_label,
+            sender_count,
+            connected_peers = ?connected_peers,
+            "no session sender registered for release request"
+        );
     }
 }
 
@@ -565,19 +620,28 @@ struct DaemonSessionCallback {
 
 impl SessionStateCallback for DaemonSessionCallback {
     fn on_remote_switch(&self, peer_id: &str, request_id: &str) {
-        let result = {
+        let (result, state_before) = {
             let mut runtime = self
                 .runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_controlled_by(peer_id)
+            let state_before = runtime.state.clone();
+            (runtime.mark_controlled_by(peer_id), state_before)
         };
         match result {
             Ok(()) => {
                 persist_status_snapshot(&self.runtime, &self.status_path);
+                let state_after = self
+                    .runtime
+                    .lock()
+                    .expect("daemon runtime mutex should not be poisoned")
+                    .state
+                    .clone();
                 info!(
                     peer = %peer_id,
                     request = %request_id,
+                    state_before = ?state_before,
+                    state_after = ?state_after,
                     "transitioned to controlled-by via remote switch"
                 );
             }
@@ -585,6 +649,7 @@ impl SessionStateCallback for DaemonSessionCallback {
                 warn!(
                     peer = %peer_id,
                     request = %request_id,
+                    state_before = ?state_before,
                     %error,
                     "failed to apply remote switch"
                 );
@@ -593,19 +658,28 @@ impl SessionStateCallback for DaemonSessionCallback {
     }
 
     fn on_remote_release(&self, peer_id: &str, request_id: &str) {
-        let result = {
+        let (result, state_before) = {
             let mut runtime = self
                 .runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.release_control()
+            let state_before = runtime.state.clone();
+            (runtime.release_control(), state_before)
         };
         match result {
             Ok(()) => {
                 persist_status_snapshot(&self.runtime, &self.status_path);
+                let state_after = self
+                    .runtime
+                    .lock()
+                    .expect("daemon runtime mutex should not be poisoned")
+                    .state
+                    .clone();
                 info!(
                     peer = %peer_id,
                     request = %request_id,
+                    state_before = ?state_before,
+                    state_after = ?state_after,
                     "transitioned to connected-idle via remote release"
                 );
             }
@@ -613,6 +687,7 @@ impl SessionStateCallback for DaemonSessionCallback {
                 warn!(
                     peer = %peer_id,
                     request = %request_id,
+                    state_before = ?state_before,
                     %error,
                     "failed to apply remote release"
                 );
@@ -628,10 +703,13 @@ fn cleanup_session(
     status_path: &std::path::Path,
     sink: &mut dyn InputEventSink,
 ) {
-    session_senders
-        .lock()
-        .expect("session sender registry should not be poisoned")
-        .remove(peer_id);
+    let sender_count = {
+        let mut senders = session_senders
+            .lock()
+            .expect("session sender registry should not be poisoned");
+        senders.remove(peer_id);
+        senders.len()
+    };
 
     if let Err(error) = sink.release_all() {
         warn!(peer = %peer_id, %error, "failed to release input state");
@@ -642,6 +720,7 @@ fn cleanup_session(
         .expect("daemon runtime mutex should not be poisoned")
         .mark_disconnected(peer_id);
     persist_status_snapshot(runtime, status_path);
+    info!(peer = %peer_id, sender_count, "cleaned up session sender after disconnect");
 }
 
 fn mark_lost_session(
@@ -650,16 +729,20 @@ fn mark_lost_session(
     runtime: &Arc<Mutex<DaemonRuntime>>,
     status_path: &std::path::Path,
 ) {
-    session_senders
-        .lock()
-        .expect("session sender registry should not be poisoned")
-        .remove(peer_id);
+    let sender_count = {
+        let mut senders = session_senders
+            .lock()
+            .expect("session sender registry should not be poisoned");
+        senders.remove(peer_id);
+        senders.len()
+    };
 
     runtime
         .lock()
         .expect("daemon runtime mutex should not be poisoned")
         .mark_disconnected(peer_id);
     persist_status_snapshot(runtime, status_path);
+    warn!(peer = %peer_id, sender_count, "marked session lost and removed sender registration");
 }
 
 fn create_platform_input_sink(
@@ -716,7 +799,33 @@ fn seed_platform_diagnostics(runtime: &Arc<Mutex<DaemonRuntime>>) {
     let mut runtime = runtime
         .lock()
         .expect("daemon runtime mutex should not be poisoned");
-    runtime.diagnostics.notes.extend(platform_notes());
+    for note in platform_notes() {
+        push_runtime_note(&mut runtime, note);
+    }
+}
+
+fn push_runtime_note(runtime: &mut DaemonRuntime, note: String) {
+    if !runtime
+        .diagnostics
+        .notes
+        .iter()
+        .any(|existing| existing == &note)
+    {
+        runtime.diagnostics.notes.push(note);
+    }
+}
+
+fn print_runtime_notes(runtime: &Arc<Mutex<DaemonRuntime>>) {
+    let notes = runtime
+        .lock()
+        .expect("daemon runtime mutex should not be poisoned")
+        .diagnostics
+        .notes
+        .clone();
+
+    for note in notes {
+        println!("note: {note}");
+    }
 }
 
 fn platform_notes() -> Vec<String> {
@@ -747,10 +856,10 @@ fn advertise_discovery_service(
                 let mut runtime = runtime
                     .lock()
                     .expect("daemon runtime mutex should not be poisoned");
-                runtime
-                    .diagnostics
-                    .notes
-                    .push("LAN discovery advertisement enabled".to_string());
+                push_runtime_note(
+                    &mut runtime,
+                    "LAN discovery advertisement enabled".to_string(),
+                );
             }
             persist_status_snapshot(runtime, status_path);
             Some(discovery)
@@ -760,10 +869,7 @@ fn advertise_discovery_service(
                 let mut runtime = runtime
                     .lock()
                     .expect("daemon runtime mutex should not be poisoned");
-                runtime
-                    .diagnostics
-                    .notes
-                    .push(format!("LAN discovery unavailable: {error}"));
+                push_runtime_note(&mut runtime, format!("LAN discovery unavailable: {error}"));
             }
             persist_status_snapshot(runtime, status_path);
             warn!(%error, "failed to advertise discovery service");

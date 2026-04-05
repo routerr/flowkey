@@ -41,7 +41,11 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum PairCommand {
     /// Create a local pairing offer
-    Init,
+    Init {
+        /// Explicit reachable ip:port to publish in the pairing token
+        #[arg(long = "advertised-addr")]
+        advertised_addr: Option<String>,
+    },
     /// Accept a pairing token
     Accept { token: String },
 }
@@ -62,9 +66,10 @@ async fn main() -> Result<()> {
             run_daemon(config).await?;
         }
         Command::Pair { command } => match command {
-            PairCommand::Init => {
+            PairCommand::Init { advertised_addr } => {
                 let config = Config::load_or_create()?;
-                let advertised_listen_addr = config.advertised_listen_addr()?;
+                let advertised_listen_addr =
+                    config.advertised_listen_addr_for_pairing(advertised_addr.as_deref())?;
                 let offer = HandshakeOffer::new(
                     NodeIdentity {
                         node_id: config.node.id.clone(),
@@ -83,6 +88,11 @@ async fn main() -> Result<()> {
                 println!("Short code: {}", offer.short_code);
                 println!("Expires at epoch seconds: {}", offer.expires_at_epoch_secs);
                 println!("Advertised listen addr: {advertised_listen_addr}");
+                if let Some(explicit_addr) = advertised_addr {
+                    println!("Pairing override: using explicit --advertised-addr {explicit_addr}");
+                } else if config.node.advertised_addr.is_some() {
+                    println!("Pairing override: using configured node.advertised_addr");
+                }
             }
             PairCommand::Accept { token } => {
                 let offer = HandshakeOffer::from_token(&token)?;
@@ -237,6 +247,8 @@ fn status_lines(config: &Config, status: Option<&DaemonStatus>) -> Vec<String> {
         for note in &snapshot.notes {
             lines.push(format!("note: {}", note));
         }
+    } else {
+        lines.push("note: start `flky daemon` to populate live runtime diagnostics".to_string());
     }
 
     lines
@@ -315,6 +327,7 @@ mod tests {
                 "peer: -".to_string(),
                 "trusted: no".to_string(),
                 "session: unavailable".to_string(),
+                "note: start `flky daemon` to populate live runtime diagnostics".to_string(),
             ]
         );
     }

@@ -22,11 +22,15 @@ impl PermissionStatus {
 
     pub fn notes(&self) -> Vec<String> {
         if self.user_session {
-            vec!["Windows is running in the active console session".to_string()]
+            vec![
+                "Windows is running in the active console session".to_string(),
+                "If remote injection still fails, run the daemon at the same privilege level as the apps you want to control".to_string(),
+            ]
         } else {
             vec![
-                "Windows requires an interactive user session for input capture and injection"
-                    .to_string(),
+                "Windows requires an interactive user session for input capture and injection".to_string(),
+                "Do not launch `flky daemon` from SSH or `Start-Process`; start it from the signed-in desktop session instead".to_string(),
+                "Open TCP port 48571 in Windows Firewall on the controlling machine if peers cannot connect".to_string(),
             ]
         }
     }

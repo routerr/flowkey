@@ -18,13 +18,17 @@ This file is for the next AI agent that continues `flowkey`.
 
 ## What Is Still Missing
 
-- SwitchRequest/SwitchRelease send and receive (protocol messages defined, handling stubbed)
 - Windows UIPI elevation: daemon must run in interactive desktop session for enigo injection
-- manual advertised address override for `pair init` (auto-detected IP may be unreachable across subnets)
 - Windows firewall rule automation (port 48571 blocked by default)
 - macOS Accessibility permission guided setup
 - graceful degradation when rdev/enigo unavailable in non-interactive sessions
 - native installers, code signing, and deeper platform UX polish
+
+Recently completed:
+
+- SwitchRequest/SwitchRelease send and receive are wired through the session channel and daemon callbacks
+- pairing now supports a persistent `node.advertised_addr` config override plus `flky pair init --advertised-addr <ip:port>` for one-off tokens
+- runtime notes are deduplicated so reconnects no longer spam identical diagnostics
 
 ## Cross-Platform Test Results (2026-04-05)
 
@@ -59,11 +63,10 @@ Key findings:
 
 ## Best Next Implementation Slice
 
-1. implement SwitchRequest/SwitchRelease send and receive in session loop
-2. resolve Windows UIPI injection (manifest, elevation, or documentation)
-3. add advertised address override for cross-subnet pairing
-4. add native installers for macOS and Windows
-5. improve platform-specific user experience details
+1. re-run the cross-platform validation from an interactive Windows desktop session
+2. resolve Windows UIPI injection limits with stronger operator guidance, manifest work, or elevation strategy
+3. add native installers for macOS and Windows
+4. improve platform-specific user experience details
 
 ## Suggested Ownership Split
 
@@ -77,6 +80,5 @@ Key findings:
 - The network/auth stack is a solid base; do not discard it.
 - The platform sink abstraction is the best place to hook the next real OS-specific work.
 - self-injected loopback suppression now shares one filter across capture and injection paths.
-- session channel currently only carries `InputEvent`; needs extension to also carry `SwitchRequest`/`SwitchRelease` control messages for remote state sync.
 - Windows daemon must run from an interactive desktop session (not SSH, not `Start-Process`) for input injection to work. UIPI blocks injection from lower-privilege processes.
-- `pair init` auto-detects the listen interface IP, but this may be wrong when machines are on different subnets. Tailscale IPs (100.x.x.x) work as a reliable alternative.
+- `pair init` auto-detects the listen interface IP by default, but this may be wrong when machines are on different subnets. Tailscale IPs (100.x.x.x) work reliably, and you can now override the published address explicitly.

@@ -34,15 +34,18 @@ Completed:
 - controller-state transitions with active peer selection
 - peer-to-peer event forwarding from local capture
 - hotkey activation-chord suppression
+- SwitchRequest/SwitchRelease send and receive wiring
 - CLI status reporting from daemon runtime snapshots
 - cross-platform cursor/key normalization
 - platform permission probes and richer OS-specific diagnostics
 - optional LAN discovery advertisement and browsing
+- pairing address override via config or CLI flag
 
 Partially implemented:
 
 - daemon state machine and session recovery
 - durable reconnect strategy
+- platform-specific operator guidance and interactive-session UX
 
 ## Proposed Repository Layout
 

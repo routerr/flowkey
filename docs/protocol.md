@@ -55,11 +55,18 @@ flky daemon
 
 Creates a pairing offer token for another machine.
 
+### Optional Flag
+
+```text
+flky pair init --advertised-addr <ip:port>
+```
+
 ### Behavior
 
 - ensures local node identity exists
 - creates a short-lived pairing offer
 - advertises a LAN-reachable listen address derived from the local bind address
+- accepts an explicit advertised address override when the auto-detected address is not reachable from the peer
 - prints a copyable token
 
 ### Example
@@ -171,6 +178,7 @@ Suggested shape:
 id = "macbook-air"
 name = "MacBook Air"
 listen_addr = "0.0.0.0:48571"
+advertised_addr = "100.79.183.18:48571"
 private_key = "base64:..."
 
 [switch]

@@ -65,7 +65,7 @@ Connection: Tailscale VPN (LAN IPs were on different subnets and not mutually ro
 | `flky switch <peer-id>` | PASS | Local state transitions to `controlling` |
 | `flky status` shows `controlling` | PASS | |
 | `flky release` | PASS | Local state transitions back to `connected-idle` |
-| Remote peer state update | FAIL | Remote stays `connected-idle`; `SwitchRequest` message not sent/handled |
+| Remote peer state update | STALE RESULT | This report predates the session-channel/control-message implementation now present in the codebase. Re-run the interactive test to confirm behavior on real machines. |
 
 ### 7. Input Forwarding
 
@@ -96,21 +96,19 @@ Connection: Tailscale VPN (LAN IPs were on different subnets and not mutually ro
 
 ### P1 - High
 
-3. **SwitchRequest/SwitchRelease not implemented** - When local daemon enters `Controlling` state, it does not send a `SwitchRequest` message to the remote peer. The remote peer never transitions to `ControlledBy`. Protocol messages exist (`Message::SwitchRequest`, `Message::SwitchRelease`) but handling is stubbed with "not yet handled" warning.
-
-4. **`pair init` advertised address may be unreachable** - Auto-detected IP address from `pair init` may not be routable from the peer's network. In our test, macOS advertised `192.168.50.104` but Windows could not reach it. No mechanism to manually specify the advertised address or prefer a specific interface.
+3. **`pair init` advertised address may be unreachable** - Auto-detected IP address from `pair init` may not be routable from the peer's network. In our test, macOS advertised `192.168.50.104` but Windows could not reach it. The repo now supports `node.advertised_addr` and `flky pair init --advertised-addr <ip:port>`; re-test with one of those paths.
 
 ### P2 - Medium
 
-5. **Windows daemon crashes when started via `Start-Process`** - Daemon prints startup banner then exits silently. Stderr is empty. Likely related to rdev requiring an interactive session for input hooks. Needs graceful degradation or clear error message.
+4. **Windows daemon crashes when started via `Start-Process`** - Daemon prints startup banner then exits silently. Stderr is empty. Likely related to rdev requiring an interactive session for input hooks. Needs graceful degradation or clearer operator guidance.
 
-6. **Windows firewall blocks daemon port by default** - Port 48571 is not open by default. Requires manual `New-NetFirewallRule` or the daemon/installer should configure this.
+5. **Windows firewall blocks daemon port by default** - Port 48571 is not open by default. Requires manual `New-NetFirewallRule` or the daemon/installer should configure this.
 
-7. **macOS Accessibility permission not granted** - Native input injection unavailable; falls back to logging sink. User needs to manually grant Accessibility permission to the terminal or daemon binary.
+6. **macOS Accessibility permission not granted** - Native input injection unavailable; falls back to logging sink. User needs to manually grant Accessibility permission to the terminal or daemon binary.
 
 ### P3 - Low
 
-8. **Duplicate diagnostic notes accumulate** - Status output shows duplicate "native input injection unavailable" notes after reconnection. The `diagnostics.notes` vector is appended to on each session setup without clearing.
+7. **Duplicate diagnostic notes accumulate** (FIXED) - Status output previously repeated identical notes after reconnect. Runtime note insertion is now deduplicated.
 
 ## Fix Plan
 
@@ -118,9 +116,7 @@ Connection: Tailscale VPN (LAN IPs were on different subnets and not mutually ro
 
 1. **[DONE]** Fix injection failure crash - Change `flowkey_net_route_input_event(sink, &event)?` to log-and-continue in `connection.rs:366`.
 
-2. **Send SwitchRequest/SwitchRelease on state change** - Extend session channel to carry control messages alongside input events. When daemon transitions to `Controlling`, send `SwitchRequest` to active peer session. When releasing, send `SwitchRelease`.
-
-3. **Handle SwitchRequest/SwitchRelease on receive** - Replace stub handlers in `run_authenticated_session`. On `SwitchRequest`: transition local state to `ControlledBy`. On `SwitchRelease`: transition back to `ConnectedIdle`.
+2. **Re-run interactive switch-state validation** - The current codebase now contains session-channel control messages and daemon callbacks for remote switch/release. Verify the real-machine behavior and replace this stale section with fresh results.
 
 ### Phase 2: Platform Hardening
 
@@ -128,11 +124,11 @@ Connection: Tailscale VPN (LAN IPs were on different subnets and not mutually ro
 
 5. **Graceful degradation for non-interactive sessions** - Detect when rdev/enigo will fail and log a clear error message instead of silent crash.
 
-6. **Fix duplicate diagnostic notes** - Clear `diagnostics.notes` before repopulating on session setup, or deduplicate.
+5. **Fix duplicate diagnostic notes** - Completed by deduplicating runtime note insertion.
 
 ### Phase 3: Network UX
 
-7. **Allow manual advertised address override** - Add `advertised_addr` config field or `--advertised-addr` CLI flag to `pair init` so users can specify a reachable address (e.g., Tailscale IP).
+6. **Allow manual advertised address override** - Completed with `node.advertised_addr` and `flky pair init --advertised-addr <ip:port>`.
 
 8. **Auto-detect Tailscale/VPN interfaces** - When multiple interfaces exist, prefer routable addresses or let user choose.
 

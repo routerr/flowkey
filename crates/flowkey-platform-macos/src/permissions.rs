@@ -29,13 +29,13 @@ impl PermissionStatus {
         if self.accessibility {
             notes.push("macOS Accessibility permission is granted".to_string());
         } else {
-            notes.push("macOS requires Accessibility permission for input control".to_string());
+            notes.push("macOS requires Accessibility permission for input control; enable it in System Settings > Privacy & Security > Accessibility".to_string());
         }
 
         if self.input_monitoring {
             notes.push("macOS Input Monitoring permission is granted".to_string());
         } else {
-            notes.push("macOS requires Input Monitoring permission for global capture".to_string());
+            notes.push("macOS requires Input Monitoring permission for global capture; enable it in System Settings > Privacy & Security > Input Monitoring".to_string());
         }
 
         notes

@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -24,6 +24,8 @@ pub struct NodeConfig {
     pub id: String,
     pub name: String,
     pub listen_addr: String,
+    #[serde(default)]
+    pub advertised_addr: Option<String>,
     pub private_key: String,
     pub public_key: String,
 }
@@ -165,7 +167,21 @@ impl Config {
     }
 
     pub fn advertised_listen_addr(&self) -> Result<String> {
-        advertised_listen_addr(&self.node.listen_addr)
+        if let Some(override_addr) = self.node.advertised_addr.as_deref() {
+            advertised_listen_addr_with_override(&self.node.listen_addr, Some(override_addr))
+        } else {
+            advertised_listen_addr(&self.node.listen_addr)
+        }
+    }
+
+    pub fn advertised_listen_addr_for_pairing(
+        &self,
+        override_addr: Option<&str>,
+    ) -> Result<String> {
+        advertised_listen_addr_with_override(
+            &self.node.listen_addr,
+            override_addr.or(self.node.advertised_addr.as_deref()),
+        )
     }
 
     fn generated_default() -> Self {
@@ -179,6 +195,7 @@ impl Config {
                 id: format!("{normalized}-{suffix}"),
                 name: hostname,
                 listen_addr: "0.0.0.0:48571".to_string(),
+                advertised_addr: None,
                 private_key: STANDARD_NO_PAD.encode(signing_key.to_bytes()),
                 public_key: STANDARD_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
             },
@@ -197,6 +214,7 @@ impl Default for Config {
                 id: "local-node".to_string(),
                 name: "Local Node".to_string(),
                 listen_addr: "0.0.0.0:48571".to_string(),
+                advertised_addr: None,
                 private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
                 public_key: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
             },
@@ -268,6 +286,28 @@ pub fn control_path_for_config_path(config_path: &Path) -> PathBuf {
 }
 
 pub fn advertised_listen_addr(listen_addr: &str) -> Result<String> {
+    advertised_listen_addr_with_override(listen_addr, None)
+}
+
+pub fn advertised_listen_addr_with_override(
+    listen_addr: &str,
+    override_addr: Option<&str>,
+) -> Result<String> {
+    if let Some(override_addr) = override_addr {
+        let socket_addr = override_addr
+            .parse::<SocketAddr>()
+            .with_context(|| format!("invalid advertised address {override_addr}"))?;
+
+        if socket_addr.ip().is_loopback() || socket_addr.ip().is_unspecified() {
+            return Err(anyhow::anyhow!(
+                "advertised address must be a routable ip:port, got {}",
+                override_addr
+            ));
+        }
+
+        return Ok(socket_addr.to_string());
+    }
+
     let socket_addr = listen_addr
         .parse::<SocketAddr>()
         .with_context(|| format!("invalid listen address {listen_addr}"))?;
@@ -288,8 +328,8 @@ pub fn advertised_listen_addr(listen_addr: &str) -> Result<String> {
 }
 
 fn detect_local_ip_address() -> Result<IpAddr> {
-    let socket = UdpSocket::bind("0.0.0.0:0")
-        .context("failed to create local address probe socket")?;
+    let socket =
+        UdpSocket::bind("0.0.0.0:0").context("failed to create local address probe socket")?;
 
     for target in ["1.1.1.1:80", "8.8.8.8:80"] {
         if socket.connect(target).is_ok() {
@@ -324,8 +364,8 @@ mod tests {
     use anyhow::{Context, Result};
 
     use super::{
-        advertised_listen_addr, control_path_for_config_path, normalize_id,
-        status_path_for_config_path, Config, PeerConfig,
+        advertised_listen_addr, advertised_listen_addr_with_override, control_path_for_config_path,
+        normalize_id, status_path_for_config_path, Config, PeerConfig,
     };
 
     #[test]
@@ -446,6 +486,25 @@ mod tests {
             .expect("specific listen address should be preserved");
 
         assert_eq!(advertised, "192.168.1.25:48571");
+    }
+
+    #[test]
+    fn advertised_listen_addr_prefers_explicit_override() {
+        let advertised =
+            advertised_listen_addr_with_override("0.0.0.0:48571", Some("100.79.183.18:48571"))
+                .expect("explicit advertised address should be preserved");
+
+        assert_eq!(advertised, "100.79.183.18:48571");
+    }
+
+    #[test]
+    fn advertised_listen_addr_rejects_non_routable_override() {
+        let error = advertised_listen_addr_with_override("0.0.0.0:48571", Some("0.0.0.0:48571"))
+            .expect_err("wildcard override should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("advertised address must be a routable ip:port"));
     }
 
     fn advertised_listen_addr_with_resolver<F>(

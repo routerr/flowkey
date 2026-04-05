@@ -347,6 +347,7 @@ pub trait SessionStateCallback: Send + Sync {
 
 pub async fn run_authenticated_session(
     mut connection: AuthenticatedConnection,
+    local_node_id: &str,
     heartbeat: HeartbeatConfig,
     sink: &mut dyn flowkey_input::InputEventSink,
     mut outbound: UnboundedReceiver<SessionCommand>,
@@ -371,15 +372,18 @@ pub async fn run_authenticated_session(
                         write_message(stream, &Message::InputEvent { sequence, event }).await?;
                     }
                     Some(SessionCommand::SwitchControl { request_id }) => {
+                        info!(peer = %peer_id, request = %request_id, "writing SwitchRequest to session stream");
                         write_message(stream, &Message::SwitchRequest {
-                            peer_id: peer_id.clone(),
+                            peer_id: local_node_id.to_string(),
                             request_id,
                         }).await?;
                     }
                     Some(SessionCommand::ReleaseControl { request_id }) => {
+                        info!(peer = %peer_id, request = %request_id, "writing SwitchRelease to session stream");
                         write_message(stream, &Message::SwitchRelease { request_id }).await?;
                     }
                     None => {
+                        info!(peer = %peer_id, "session command channel closed");
                         outbound_open = false;
                     }
                 }
@@ -394,7 +398,7 @@ pub async fn run_authenticated_session(
 
                 match message {
                     Message::Heartbeat => {
-                        // Keepalive acknowledged.
+                        info!(peer = %peer_id, "received heartbeat");
                     }
                     Message::InputEvent { sequence, event } => {
                         info!(peer = %peer_id, sequence, event = ?event, "received input event");
@@ -631,6 +635,7 @@ mod tests {
             let callback = NoopCallback;
             run_authenticated_session(
                 connection,
+                "local-node",
                 super::HeartbeatConfig {
                     interval_secs: 60,
                     timeout_secs: 60,

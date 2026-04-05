@@ -145,6 +145,11 @@ The daemon also uses sibling files in the same directory for runtime state:
 - `control.toml` for queued `flky switch` and `flky release` requests
 - `status.toml` for the live daemon snapshot used by `flky status`
 
+Optional pairing override:
+
+- `node.advertised_addr` can be set in `config.toml` when the auto-detected address is not reachable from the peer
+- `flky pair init --advertised-addr <ip:port>` overrides both auto-detection and config for a single pairing token
+
 You can override that path with:
 
 ```bash
@@ -157,6 +162,13 @@ Current behavior:
 - if it does not exist, the CLI falls back to built-in defaults
 
 Running `flky pair init` or `flky daemon` will create and persist a config automatically if one does not exist yet.
+
+Example override in `config.toml`:
+
+```toml
+[node]
+advertised_addr = "100.79.183.18:48571"
+```
 
 ## Commands
 
@@ -217,6 +229,17 @@ What is real now:
 - `flky switch` and `flky release` write a local command file that the daemon consumes and applies
 
 What is still not done yet:
+
+- native input injection still depends on the local OS permission model
+- Windows must run the daemon from the signed-in desktop session, not via SSH or `Start-Process`
+- Windows Firewall may need an inbound rule for TCP port `48571`
+- macOS still requires Accessibility and Input Monitoring permission grants for full operation
+
+## Platform Notes
+
+- Windows: start `flky daemon` from the interactive desktop session. If injection still fails, run it at the same privilege level as the target apps.
+- Windows: if peers cannot connect, open TCP port `48571` in Windows Firewall.
+- macOS: grant Accessibility in `System Settings > Privacy & Security > Accessibility` and Input Monitoring in `System Settings > Privacy & Security > Input Monitoring`.
 
 - replay-resistant online authentication beyond token expiry
 - remaining session recovery edge cases

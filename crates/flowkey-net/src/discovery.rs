@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use flowkey_config::Config;
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo, ScopedIp};
+use mdns_sd::{ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
 
 pub const SERVICE_TYPE: &str = "_flky._tcp.local.";
 const PROPERTY_NODE_ID: &str = "node_id";
