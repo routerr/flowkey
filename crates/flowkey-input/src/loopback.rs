@@ -81,6 +81,7 @@ mod tests {
         let mut suppressor = LoopbackSuppressor::new(Duration::from_secs(1));
         let event = InputEvent::MouseButtonDown {
             button: MouseButton::Left,
+            modifiers: Modifiers::none(),
         };
 
         suppressor.record(event.clone());

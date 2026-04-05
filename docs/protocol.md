@@ -31,6 +31,7 @@ flky peers list
 flky switch <peer-id>
 flky release
 flky status
+flky doctor
 ```
 
 ## `flky daemon`
@@ -118,7 +119,8 @@ Browses for nearby daemons advertising themselves on the local network.
 ### Behavior
 
 - uses optional mDNS advertisement published by running daemons
-- prints discovered node ids, names, and dialable addresses
+- advertisements include all non-loopback IP addresses
+- prints discovered node ids, names, and all dialable addresses
 - does not modify trust on its own
 
 This command is a convenience for same-LAN setup. The signed pairing token remains the trust mechanism.
@@ -130,6 +132,7 @@ Requests that the local daemon enter controller mode toward the selected peer.
 ### Behavior
 
 - validates that the peer is trusted and authenticated
+- **Reachability Race**: If multiple candidate IPs exist for the peer, the client performs a UDP race to select the best one before TCP session establishment.
 - writes a local control request into the config directory
 - the daemon polls that request file and applies the switch while it is running
 
@@ -162,6 +165,16 @@ inject: native
 note: macOS requires Accessibility permission for input control
 note: macOS requires Input Monitoring permission for global capture
 ```
+
+## `flky doctor`
+
+Performs system-level diagnostics for common setup issues.
+
+### Behavior
+- Probes macOS Accessibility and Input Monitoring permissions.
+- Checks Windows interactive session status.
+- Tests local port binding for firewall issues.
+- Validates config file existence and daemon status.
 
 ## Config File Spec
 
@@ -277,11 +290,21 @@ The short code is for user confirmation in logs and CLI output, not primary trus
 
 Recommended V1 transport:
 
-- `TCP`
-- one persistent connection per peer
-- encrypted after handshake
+- `TCP`: Main control and input stream.
+- `UDP`: Reachability Probing (FRP).
 
-## Framing
+## Reachability Probing (FRP)
+
+Used during discovery and before TCP connection to select the best interface.
+
+### Messages (UDP)
+
+- **`FRP_PROBE`**: `{ "type": "probe_request", "sender_id": "...", "nonce": "..." }`
+- **`FRP_PONG`**: `{ "type": "probe_response", "responder_id": "...", "nonce": "..." }`
+
+Nodes listen on their configured TCP port but via UDP. The first responder wins the race.
+
+## Framing (TCP)
 
 Each frame:
 

@@ -29,19 +29,20 @@
 - pairing address override via `node.advertised_addr` and `flky pair init --advertised-addr`
 - remote SwitchRequest propagation now transitions the target peer into `controlled-by`
 - local capture now emits mouse movement after initializing the first cursor sample
+- **Exclusive Capture (macOS)** using `CGEventTap` for local input suppression
+- **Automatic Control Resume**: Role persistence across reconnects
+- **Reachability Probing (FRP)**: Parallel UDP racing for multi-IP zero-config switching
+- **`flky doctor`**: System diagnostic tool for permissions and network
 
 ## Partial
 
-- daemon runtime state management and reconnect recovery
-- disconnect cleanup
-- reconnect/session resume policy
+- Windows exclusive capture (currently falls back to passive)
 - native installers and code signing
 - graceful degradation when rdev/enigo are unavailable in non-interactive sessions
 
 ## Not Started
 
 - Windows UIPI elevation or manifest for input injection
-- graceful degradation when rdev/enigo unavailable in non-interactive sessions
 
 ## Verified
 

@@ -42,11 +42,15 @@ Completed:
 - pairing address override via config or CLI flag
 - remote SwitchRequest propagation using the controller node ID
 - local mouse-move capture initialization and forwarding
+- **macOS Exclusive Capture** via `CGEventTap`
+- **Automatic Control Resume** policy
+- **Reachability Probing (FRP)** for multi-interface machines
+- **`flky doctor`** diagnostic command
 
 Partially implemented:
 
-- daemon state machine and session recovery
-- durable reconnect strategy
+- Windows exclusive capture
+- durable reconnect strategy (core is there, needs more chaos testing)
 - platform-specific operator guidance and interactive-session UX
 - short end-to-end regression coverage for the validated control path
 

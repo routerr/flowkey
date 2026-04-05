@@ -34,12 +34,32 @@ impl Default for Modifiers {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputEvent {
-    KeyDown { code: String, modifiers: Modifiers },
-    KeyUp { code: String, modifiers: Modifiers },
-    MouseMove { dx: i32, dy: i32 },
-    MouseButtonDown { button: MouseButton },
-    MouseButtonUp { button: MouseButton },
-    MouseWheel { delta_x: i32, delta_y: i32 },
+    KeyDown {
+        code: String,
+        modifiers: Modifiers,
+    },
+    KeyUp {
+        code: String,
+        modifiers: Modifiers,
+    },
+    MouseMove {
+        dx: i32,
+        dy: i32,
+        modifiers: Modifiers,
+    },
+    MouseButtonDown {
+        button: MouseButton,
+        modifiers: Modifiers,
+    },
+    MouseButtonUp {
+        button: MouseButton,
+        modifiers: Modifiers,
+    },
+    MouseWheel {
+        delta_x: i32,
+        delta_y: i32,
+        modifiers: Modifiers,
+    },
 }
 
 #[cfg(test)]
@@ -50,6 +70,7 @@ mod tests {
     fn input_event_round_trips_through_toml() {
         let event = InputEvent::MouseButtonDown {
             button: MouseButton::Left,
+            modifiers: Modifiers::none(),
         };
 
         let encoded = toml::to_string(&event).expect("event should serialize");

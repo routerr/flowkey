@@ -62,10 +62,24 @@ impl NativeInputSink {
                 self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
                 self.key_action(key_code, Direction::Release)
             }
-            InputEvent::MouseMove { dx, dy } => self.move_mouse(*dx, *dy),
-            InputEvent::MouseButtonDown { button } => self.button_action(*button, Direction::Press),
-            InputEvent::MouseButtonUp { button } => self.button_action(*button, Direction::Release),
-            InputEvent::MouseWheel { delta_x, delta_y } => {
+            InputEvent::MouseMove { dx, dy, modifiers } => {
+                self.sync_modifiers(modifiers, None)?;
+                self.move_mouse(*dx, *dy)
+            }
+            InputEvent::MouseButtonDown { button, modifiers } => {
+                self.sync_modifiers(modifiers, None)?;
+                self.button_action(*button, Direction::Press)
+            }
+            InputEvent::MouseButtonUp { button, modifiers } => {
+                self.sync_modifiers(modifiers, None)?;
+                self.button_action(*button, Direction::Release)
+            }
+            InputEvent::MouseWheel {
+                delta_x,
+                delta_y,
+                modifiers,
+            } => {
+                self.sync_modifiers(modifiers, None)?;
                 if *delta_y != 0 {
                     self.enigo
                         .scroll(*delta_y, Axis::Vertical)
@@ -251,7 +265,10 @@ impl NativeInputSink {
 
         for button in buttons {
             if let Some(button) = button_name(button) {
-                self.record_loopback(&InputEvent::MouseButtonUp { button });
+                self.record_loopback(&InputEvent::MouseButtonUp {
+                    button,
+                    modifiers: self.current_modifiers,
+                });
             }
             self.enigo
                 .button(button, Direction::Release)
