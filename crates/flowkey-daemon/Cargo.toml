@@ -14,3 +14,4 @@ flowkey-input = { path = "../flowkey-input" }
 flowkey-platform-macos = { path = "../flowkey-platform-macos" }
 flowkey-platform-windows = { path = "../flowkey-platform-windows" }
 flowkey-net = { path = "../flowkey-net" }
+uuid = { version = "1.1", features = ["v4"] }

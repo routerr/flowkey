@@ -3,12 +3,18 @@ use std::collections::HashMap;
 use crate::session::Session;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Role {
+    Controlling,
+    ControlledBy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonState {
     Disconnected,
     ConnectedIdle,
     Controlling { peer_id: String },
     ControlledBy { peer_id: String },
-    Recovering,
+    Recovering { intended_role: Option<Role> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +52,7 @@ impl DaemonRuntime {
         }
     }
 
-    pub fn mark_authenticated(&mut self, peer_id: impl Into<String>) {
+    pub fn mark_authenticated(&mut self, peer_id: impl Into<String>) -> Option<Role> {
         let peer_id = peer_id.into();
         let resume_target = peer_id.clone();
         self.sessions
@@ -54,16 +60,22 @@ impl DaemonRuntime {
         if self.active_peer_id.is_none() {
             self.active_peer_id = Some(peer_id);
         }
-        if matches!(self.state, DaemonState::Recovering)
-            && self
+
+        let mut resumed_role = None;
+        if let DaemonState::Recovering { intended_role } = &self.state {
+            if self
                 .active_peer_id
                 .as_deref()
                 .is_some_and(|active| active == resume_target)
-        {
-            self.state = DaemonState::ConnectedIdle;
-        } else if !matches!(self.state, DaemonState::Recovering) {
+            {
+                resumed_role = intended_role.clone();
+                self.state = DaemonState::ConnectedIdle;
+            }
+        } else {
             self.state = DaemonState::ConnectedIdle;
         }
+
+        resumed_role
     }
 
     pub fn mark_disconnected(&mut self, peer_id: &str) {
@@ -78,10 +90,13 @@ impl DaemonRuntime {
         }
 
         if active_peer_removed {
-            self.state = match current_state {
-                DaemonState::Recovering => DaemonState::Recovering,
-                _ => DaemonState::Recovering,
+            let intended_role = match current_state {
+                DaemonState::Controlling { .. } => Some(Role::Controlling),
+                DaemonState::ControlledBy { .. } => Some(Role::ControlledBy),
+                DaemonState::Recovering { intended_role } => intended_role,
+                _ => None,
             };
+            self.state = DaemonState::Recovering { intended_role };
             return;
         }
 
@@ -96,7 +111,7 @@ impl DaemonRuntime {
             Some(session) if session.authenticated => {
                 self.active_peer_id = Some(peer_id);
                 self.state = match self.state {
-                    DaemonState::Recovering => DaemonState::ConnectedIdle,
+                    DaemonState::Recovering { .. } => DaemonState::ConnectedIdle,
                     DaemonState::Controlling { .. } => DaemonState::Controlling {
                         peer_id: self
                             .active_peer_id
@@ -141,7 +156,7 @@ impl DaemonRuntime {
                 Ok(())
             }
             DaemonState::Disconnected => Err("daemon is disconnected".to_string()),
-            DaemonState::Recovering => Err("daemon is recovering".to_string()),
+            DaemonState::Recovering { .. } => Err("daemon is recovering".to_string()),
         }
     }
 
@@ -165,12 +180,12 @@ impl DaemonRuntime {
             }
             DaemonState::ConnectedIdle => Ok(()),
             DaemonState::Disconnected => Err("daemon is disconnected".to_string()),
-            DaemonState::Recovering => Err("daemon is recovering".to_string()),
+            DaemonState::Recovering { .. } => Err("daemon is recovering".to_string()),
         }
     }
 
     pub fn enter_recovering(&mut self) {
-        self.state = DaemonState::Recovering;
+        self.state = DaemonState::Recovering { intended_role: None };
     }
 }
 
@@ -182,7 +197,7 @@ impl Default for DaemonRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{DaemonRuntime, DaemonState};
+    use super::{DaemonRuntime, DaemonState, Role};
 
     #[test]
     fn new_runtime_starts_disconnected() {
@@ -269,7 +284,7 @@ mod tests {
 
         runtime.mark_disconnected("office-pc");
 
-        assert_eq!(runtime.state, DaemonState::Recovering);
+        assert_eq!(runtime.state, DaemonState::Recovering { intended_role: Some(Role::Controlling) });
         assert_eq!(runtime.active_peer_id.as_deref(), Some("office-pc"));
         assert!(!runtime.sessions.contains_key("office-pc"));
         assert!(runtime.sessions.contains_key("spare-pc"));
@@ -299,7 +314,7 @@ mod tests {
 
         runtime.mark_authenticated("backup-pc");
 
-        assert_eq!(runtime.state, DaemonState::Recovering);
+        assert_eq!(runtime.state, DaemonState::Recovering { intended_role: Some(Role::Controlling) });
         assert_eq!(runtime.active_peer_id.as_deref(), Some("office-pc"));
         assert!(!runtime.sessions.contains_key("office-pc"));
         assert!(runtime.sessions.contains_key("spare-pc"));
