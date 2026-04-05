@@ -31,7 +31,7 @@ impl DiscoveryAdvertisement {
 pub struct DiscoveredPeer {
     pub id: String,
     pub name: String,
-    pub addr: String,
+    pub addrs: Vec<String>,
     pub hostname: String,
     pub service_name: String,
 }
@@ -114,28 +114,28 @@ fn peer_from_resolved_service(service: &mdns_sd::ResolvedService) -> Option<Disc
         .filter(|value| !value.is_empty())
         .unwrap_or(&id)
         .to_string();
-    let ip = preferred_address(&service.addresses)?;
+    let mut addrs: Vec<String> = service
+        .addresses
+        .iter()
+        .map(mdns_sd::ScopedIp::to_ip_addr)
+        .filter(|ip| !ip.is_loopback())
+        .map(|ip| SocketAddr::new(ip, service.port).to_string())
+        .collect();
+    
+    addrs.sort(); // Predictable order
+    addrs.dedup();
+
+    if addrs.is_empty() {
+        return None;
+    }
 
     Some(DiscoveredPeer {
         id,
         name,
-        addr: SocketAddr::new(ip, service.port).to_string(),
+        addrs,
         hostname: service.host.clone(),
         service_name: service.fullname.clone(),
     })
-}
-
-fn preferred_address(addresses: &HashSet<ScopedIp>) -> Option<IpAddr> {
-    addresses
-        .iter()
-        .map(ScopedIp::to_ip_addr)
-        .find(|ip| ip.is_ipv4() && !ip.is_loopback())
-        .or_else(|| {
-            addresses
-                .iter()
-                .map(ScopedIp::to_ip_addr)
-                .find(|ip| !ip.is_loopback())
-        })
 }
 
 fn sanitize_label(value: &str) -> String {
@@ -188,7 +188,7 @@ mod tests {
         let peer = peer_from_resolved_service(&service).expect("service should parse");
         assert_eq!(peer.id, "office-pc");
         assert_eq!(peer.name, "Office PC");
-        assert_eq!(peer.addr, "192.168.1.25:48571");
+        assert_eq!(peer.addrs, vec!["192.168.1.25:48571".to_string()]);
         assert_eq!(peer.hostname, "office-pc.local.");
     }
 

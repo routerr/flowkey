@@ -354,6 +354,54 @@ pub fn advertised_listen_addr_with_override(
     Ok(SocketAddr::new(advertised_ip, socket_addr.port()).to_string())
 }
 
+pub fn local_routable_ips() -> Result<Vec<IpAddr>> {
+    let mut ips = Vec::new();
+    
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(interfaces) = if_addrs::get_if_addrs() {
+            for interface in interfaces {
+                let ip = interface.ip();
+                if !ip.is_loopback() && ip.is_ipv4() {
+                    ips.push(ip);
+                }
+            }
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(interfaces) = if_addrs::get_if_addrs() {
+            for interface in interfaces {
+                let ip = interface.ip();
+                if !ip.is_loopback() && ip.is_ipv4() {
+                    ips.push(ip);
+                }
+            }
+        }
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        if let Ok(interfaces) = if_addrs::get_if_addrs() {
+            for interface in interfaces {
+                let ip = interface.ip();
+                if !ip.is_loopback() && ip.is_ipv4() {
+                    ips.push(ip);
+                }
+            }
+        }
+    }
+
+    if ips.is_empty() {
+        if let Ok(ip) = detect_local_ip_address() {
+            ips.push(ip);
+        }
+    }
+    
+    Ok(ips)
+}
+
 fn detect_local_ip_address() -> Result<IpAddr> {
     let socket =
         UdpSocket::bind("0.0.0.0:0").context("failed to create local address probe socket")?;
