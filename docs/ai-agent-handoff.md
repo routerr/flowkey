@@ -29,6 +29,8 @@ Recently completed:
 - SwitchRequest/SwitchRelease send and receive are wired through the session channel and daemon callbacks
 - pairing now supports a persistent `node.advertised_addr` config override plus `flky pair init --advertised-addr <ip:port>` for one-off tokens
 - runtime notes are deduplicated so reconnects no longer spam identical diagnostics
+- remote switch propagation now uses the controller node ID in `SwitchRequest`, so the controlled peer can transition into `controlled-by`
+- mouse movement capture now initializes `last_mouse_position` correctly, so `MouseMove` events are emitted after the first observed pointer sample
 
 ## Cross-Platform Test Results (2026-04-05)
 
@@ -36,10 +38,13 @@ First real macOS-to-Windows test via Tailscale. See [cross-platform-test-report.
 
 Key findings:
 - Pairing, auth, session, heartbeat, reconnect all work
-- Input events successfully captured on macOS, serialized, and delivered to Windows
+- Input events successfully captured, serialized, and delivered cross-platform
 - Windows injection blocked by UIPI (daemon was started via SSH, not interactive desktop)
 - Injection failure previously crashed the session (fixed: now logs warning and continues)
 - `pair init` auto-detected IP may not be routable; Tailscale IPs were used as workaround
+- Two real-machine bugs were fixed during the interactive validation loop:
+  - `SwitchRequest` previously advertised the remote peer ID instead of the controller node ID, so remote state stayed `connected-idle`
+  - local capture dropped all mouse-move events because the first `MouseMove` did not persist the initial cursor position before returning `None`
 
 ## Important Files
 
@@ -76,9 +81,10 @@ Key findings:
 
 ## Notes
 
-- The repository already passes `cargo test` (14 tests).
+- The repository passes `cargo build`; keep `cargo test` current and update this note when the suite changes.
 - The network/auth stack is a solid base; do not discard it.
 - The platform sink abstraction is the best place to hook the next real OS-specific work.
 - self-injected loopback suppression now shares one filter across capture and injection paths.
 - Windows daemon must run from an interactive desktop session (not SSH, not `Start-Process`) for input injection to work. UIPI blocks injection from lower-privilege processes.
 - `pair init` auto-detects the listen interface IP by default, but this may be wrong when machines are on different subnets. Tailscale IPs (100.x.x.x) work reliably, and you can now override the published address explicitly.
+- If clicks work but the pointer does not move, check whether `MouseMove` lines are present in the controller daemon log before blaming platform injection.

@@ -26,6 +26,9 @@
 - runtime diagnostics for local capture, injection backend, and permission hints
 - platform permission probes and OS-specific readiness diagnostics
 - session resilience: injection failure no longer crashes the TCP session
+- pairing address override via `node.advertised_addr` and `flky pair init --advertised-addr`
+- remote SwitchRequest propagation now transitions the target peer into `controlled-by`
+- local capture now emits mouse movement after initializing the first cursor sample
 
 ## Partial
 
@@ -37,18 +40,18 @@
 
 ## Not Started
 
-- manual advertised address override for `pair init`
 - Windows UIPI elevation or manifest for input injection
 - graceful degradation when rdev/enigo unavailable in non-interactive sessions
 
 ## Verified
 
 - `cargo build` (macOS and Windows)
-- `cargo test` (60 tests pass in the current workspace)
+- `cargo test` (current workspace passes; see crate-specific verification below)
+- `cargo test -p flowkey-input` (15 tests pass, including mouse-move capture regression coverage)
 - cross-platform pairing flow (macOS <-> Windows via Tailscale)
 - authenticated TCP session establishment (macOS <-> Windows)
-- input event capture, serialization, and remote delivery
-- local and remote SwitchRequest/SwitchRelease state propagation in code path and unit coverage
+- input event capture, serialization, remote delivery, and real mouse movement forwarding
+- local and remote SwitchRequest/SwitchRelease state propagation in code path and interactive validation
 - see [cross-platform-test-report.md](./cross-platform-test-report.md) for full results
 
 ## Known Issues
@@ -60,7 +63,7 @@
 
 ## Recommended Next Steps
 
-1. Re-run an interactive macOS <-> Windows validation pass using the new pairing override path
+1. Run a short manual regression sweep: move, click, drag, wheel, type, hotkey switch, release
 2. Document Windows UIPI requirement and firewall setup with exact operator steps
 3. Add native installers and platform-specific UX polish
 4. Consider privilege/session detection before starting capture hooks on Windows

@@ -65,17 +65,18 @@ Connection: Tailscale VPN (LAN IPs were on different subnets and not mutually ro
 | `flky switch <peer-id>` | PASS | Local state transitions to `controlling` |
 | `flky status` shows `controlling` | PASS | |
 | `flky release` | PASS | Local state transitions back to `connected-idle` |
-| Remote peer state update | STALE RESULT | This report predates the session-channel/control-message implementation now present in the codebase. Re-run the interactive test to confirm behavior on real machines. |
+| Remote peer state update | PASS (after fix) | Controlled peer now transitions to `controlled-by` once `SwitchRequest` carries the controller node ID instead of the remote peer ID |
 
 ### 7. Input Forwarding
 
 | Step | Result | Notes |
 |------|--------|-------|
-| Local input capture (macOS) | PASS | rdev captures keyboard/mouse events |
+| Local input capture (controller) | PASS (after fix) | rdev captures keyboard, mouse buttons, wheel, and now mouse movement after initializing the first cursor sample correctly |
 | Event serialization and TCP send | PASS | `InputEvent` messages sent over wire |
-| Remote event receive (Windows) | PASS | `received input event` logged with correct key code |
-| Remote input injection (Windows) | FAIL | `enigo` blocked by UIPI: "not all input events were sent. they may have been blocked by UIPI" |
-| Session survives injection failure | FAIL (fixed) | Injection error propagated via `?` and killed session; fixed to log warning and continue |
+| Remote event receive | PASS | `received input event` logged with correct key/button codes and mouse movement |
+| Remote input injection (Windows) | PASS in interactive desktop session | Fails under SSH / non-interactive session because UIPI blocks injection |
+| Remote input injection (macOS) | PASS when terminal has Accessibility/Input Monitoring permission | Falls back to logging sink if the launching terminal lacks permission |
+| Session survives injection failure | PASS | Injection errors now log warnings and the session remains up |
 
 ### 8. Platform Diagnostics
 
@@ -94,21 +95,25 @@ Connection: Tailscale VPN (LAN IPs were on different subnets and not mutually ro
 
 2. **Injection failure crashes session** (FIXED) - `route_input_event` error propagated via `?` in `run_authenticated_session`, causing the entire TCP session to disconnect on first injection failure. Fixed: now logs warning and continues.
 
+3. **Remote switch used the wrong controller peer ID** (FIXED) - `SwitchRequest` was carrying the remote peer ID instead of the controller node ID, so the target daemon rejected the transition to `controlled-by` with `controlled peer must already be authenticated`.
+
 ### P1 - High
 
-3. **`pair init` advertised address may be unreachable** - Auto-detected IP address from `pair init` may not be routable from the peer's network. In our test, macOS advertised `192.168.50.104` but Windows could not reach it. The repo now supports `node.advertised_addr` and `flky pair init --advertised-addr <ip:port>`; re-test with one of those paths.
+4. **`pair init` advertised address may be unreachable** - Auto-detected IP address from `pair init` may not be routable from the peer's network. In our test, macOS advertised `192.168.50.104` but Windows could not reach it. The repo now supports `node.advertised_addr` and `flky pair init --advertised-addr <ip:port>`; re-test with one of those paths.
+
+5. **Mouse movement capture emitted no `MouseMove` events** (FIXED) - the first observed `MouseMove` returned before storing the initial cursor position, so all later movement samples were also dropped. Fixed by persisting the position before delta normalization.
 
 ### P2 - Medium
 
-4. **Windows daemon crashes when started via `Start-Process`** - Daemon prints startup banner then exits silently. Stderr is empty. Likely related to rdev requiring an interactive session for input hooks. Needs graceful degradation or clearer operator guidance.
+6. **Windows daemon crashes when started via `Start-Process`** - Daemon prints startup banner then exits silently. Stderr is empty. Likely related to rdev requiring an interactive session for input hooks. Needs graceful degradation or clearer operator guidance.
 
-5. **Windows firewall blocks daemon port by default** - Port 48571 is not open by default. Requires manual `New-NetFirewallRule` or the daemon/installer should configure this.
+7. **Windows firewall blocks daemon port by default** - Port 48571 is not open by default. Requires manual `New-NetFirewallRule` or the daemon/installer should configure this.
 
-6. **macOS Accessibility permission not granted** - Native input injection unavailable; falls back to logging sink. User needs to manually grant Accessibility permission to the terminal or daemon binary.
+8. **macOS Accessibility permission not granted** - Native input injection unavailable; falls back to logging sink. User needs to manually grant Accessibility permission to the terminal or daemon binary.
 
 ### P3 - Low
 
-7. **Duplicate diagnostic notes accumulate** (FIXED) - Status output previously repeated identical notes after reconnect. Runtime note insertion is now deduplicated.
+9. **Duplicate diagnostic notes accumulate** (FIXED) - Status output previously repeated identical notes after reconnect. Runtime note insertion is now deduplicated.
 
 ## Fix Plan
 
@@ -116,7 +121,7 @@ Connection: Tailscale VPN (LAN IPs were on different subnets and not mutually ro
 
 1. **[DONE]** Fix injection failure crash - Change `flowkey_net_route_input_event(sink, &event)?` to log-and-continue in `connection.rs:366`.
 
-2. **Re-run interactive switch-state validation** - The current codebase now contains session-channel control messages and daemon callbacks for remote switch/release. Verify the real-machine behavior and replace this stale section with fresh results.
+2. **Re-run a short cross-platform regression pass** - mouse move, click, drag, wheel, typing, hotkey switch, and release from real desktop sessions on both platforms.
 
 ### Phase 2: Platform Hardening
 
@@ -124,7 +129,7 @@ Connection: Tailscale VPN (LAN IPs were on different subnets and not mutually ro
 
 5. **Graceful degradation for non-interactive sessions** - Detect when rdev/enigo will fail and log a clear error message instead of silent crash.
 
-5. **Fix duplicate diagnostic notes** - Completed by deduplicating runtime note insertion.
+6. **Fix duplicate diagnostic notes** - Completed by deduplicating runtime note insertion.
 
 ### Phase 3: Network UX
 

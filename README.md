@@ -49,7 +49,7 @@ Deferred until later:
 
 ## Current Status
 
-This repo is now past the initial scaffold and has a working trust and transport path plus native injection backends:
+This repo is now past the initial scaffold and has a working cross-platform control path under the expected operator conditions (interactive Windows desktop session, macOS terminal with Accessibility/Input Monitoring permission):
 
 - Rust workspace created
 - crate boundaries defined
@@ -62,9 +62,11 @@ This repo is now past the initial scaffold and has a working trust and transport
 - captured local input now forwards to the active peer session on supported platforms
 - hotkey activation chords are suppressed so the switch shortcut does not leak into the forwarded stream
 - `flky switch` and `flky release` now queue local daemon control requests through a file-backed command channel
+- remote switch propagation now drives the target peer into `controlled-by`
+- local capture now emits mouse movement correctly after the first observed cursor sample
 - release bundles and checksum files can be generated locally or by tagged GitHub Actions releases
 
-The code is intentionally thin right now. The goal is to provide a clean foundation for incremental implementation rather than pretend the hard platform-specific behavior already exists.
+The remaining gaps are mostly platform hardening and UX polish rather than missing core protocol wiring.
 
 ## Getting Started
 

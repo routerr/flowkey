@@ -8,6 +8,7 @@ This document defines a minimal V1 CLI and a matching peer-to-peer daemon protoc
 - paired peers only
 - logged-in desktop sessions only
 - keyboard and mouse forwarding only
+- controller-side input is currently passively observed and forwarded, not exclusively grabbed from the local OS
 
 ## Terminology
 

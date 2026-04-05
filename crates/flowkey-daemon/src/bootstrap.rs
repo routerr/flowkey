@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use flowkey_config::Config;
+use flowkey_config::{CaptureMode, Config};
 use flowkey_core::daemon::{DaemonRuntime, DaemonState};
 use flowkey_core::recovery::ReconnectBackoff;
 use flowkey_core::DaemonCommand;
@@ -55,6 +55,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
     println!("node: {}", config.node.name);
     println!("listen: {}", config.node.listen_addr);
     println!("hotkey: {}", config.switch.hotkey);
+    println!("capture mode: {}", config.switch.capture_mode.as_str());
     println!("trusted peers: {}", config.peers.len());
     persist_status_snapshot(&runtime, &status_path);
     print_runtime_notes(&runtime);
@@ -81,6 +82,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
         Arc::clone(&loopback),
         status_path.clone(),
         hotkey_binding,
+        config.switch.capture_mode,
     );
     spawn_control_watcher(
         Arc::clone(&runtime),
@@ -295,22 +297,25 @@ fn spawn_hotkey_watcher(
     loopback: SharedLoopbackSuppressor,
     status_path: PathBuf,
     binding: HotkeyBinding,
+    capture_mode: CaptureMode,
 ) {
-    #[cfg(target_os = "macos")]
-    let mut capture: Box<dyn InputCapture> = Box::new(
-        flowkey_platform_macos::capture::MacosCapture::with_loopback(binding, Some(loopback)),
-    );
-
-    #[cfg(target_os = "windows")]
-    let mut capture: Box<dyn InputCapture> = Box::new(
-        flowkey_platform_windows::capture::WindowsCapture::with_loopback(binding, Some(loopback)),
-    );
+    let (mut capture, capture_note): (Box<dyn InputCapture>, Option<String>) = create_platform_input_capture(binding, loopback, capture_mode);
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let _ = (runtime, session_senders, loopback, status_path, binding);
+    let _ = (&runtime, &session_senders, &status_path, capture_mode);
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
+        if let Some(note) = capture_note {
+            {
+                let mut runtime = runtime
+                    .lock()
+                    .expect("daemon runtime mutex should not be poisoned");
+                push_runtime_note(&mut runtime, note);
+            }
+            persist_status_snapshot(&runtime, &status_path);
+        }
+
         if let Err(error) = capture.start() {
             {
                 let mut runtime = runtime
@@ -743,6 +748,74 @@ fn mark_lost_session(
         .mark_disconnected(peer_id);
     persist_status_snapshot(runtime, status_path);
     warn!(peer = %peer_id, sender_count, "marked session lost and removed sender registration");
+}
+
+fn create_platform_input_capture(
+    binding: HotkeyBinding,
+    loopback: SharedLoopbackSuppressor,
+    capture_mode: CaptureMode,
+) -> (Box<dyn InputCapture>, Option<String>) {
+    #[cfg(target_os = "macos")]
+    {
+        let note = match capture_mode {
+            CaptureMode::Passive => None,
+            CaptureMode::Exclusive => Some(
+                "exclusive capture mode requested on macOS; using passive capture until filtering event-tap support is implemented"
+                    .to_string(),
+            ),
+        };
+
+        return (
+            Box::new(flowkey_platform_macos::capture::MacosCapture::with_loopback(
+                binding,
+                Some(loopback),
+            )),
+            note,
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let note = match capture_mode {
+            CaptureMode::Passive => None,
+            CaptureMode::Exclusive => Some(
+                "exclusive capture mode requested on Windows; current build still uses passive capture until low-level suppression hooks are implemented"
+                    .to_string(),
+            ),
+        };
+
+        let capture: Box<dyn InputCapture> = match capture_mode {
+            CaptureMode::Passive => Box::new(
+                flowkey_platform_windows::capture::WindowsCapture::with_loopback(
+                    binding,
+                    Some(loopback),
+                ),
+            ),
+            CaptureMode::Exclusive => Box::new(
+                flowkey_platform_windows::capture::WindowsExclusiveCapture::with_loopback(
+                    binding,
+                    Some(loopback),
+                ),
+            ),
+        };
+
+        return (capture, note);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (binding, loopback, capture_mode);
+        (
+            Box::new(flowkey_input::capture::LocalInputCapture::new(HotkeyBinding {
+                code: flowkey_input::keycode::KeyCode::Character('k'),
+                modifiers: flowkey_input::event::Modifiers::default(),
+            })),
+            Some(
+                "local capture is unavailable on this platform; hotkey watcher will remain disabled"
+                    .to_string(),
+            ),
+        )
+    }
 }
 
 fn create_platform_input_sink(

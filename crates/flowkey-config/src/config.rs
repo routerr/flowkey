@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub node: NodeConfig,
     pub switch: SwitchConfig,
+    #[serde(default)]
     pub peers: Vec<PeerConfig>,
 }
 
@@ -30,9 +31,33 @@ pub struct NodeConfig {
     pub public_key: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptureMode {
+    Passive,
+    Exclusive,
+}
+
+impl Default for CaptureMode {
+    fn default() -> Self {
+        Self::Passive
+    }
+}
+
+impl CaptureMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Passive => "passive",
+            Self::Exclusive => "exclusive",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwitchConfig {
     pub hotkey: String,
+    #[serde(default)]
+    pub capture_mode: CaptureMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +226,7 @@ impl Config {
             },
             switch: SwitchConfig {
                 hotkey: "Ctrl+Alt+Shift+K".to_string(),
+                capture_mode: CaptureMode::Passive,
             },
             peers: Vec::new(),
         }
@@ -220,6 +246,7 @@ impl Default for Config {
             },
             switch: SwitchConfig {
                 hotkey: "Ctrl+Alt+Shift+K".to_string(),
+                capture_mode: CaptureMode::Passive,
             },
             peers: Vec::new(),
         }
@@ -365,7 +392,7 @@ mod tests {
 
     use super::{
         advertised_listen_addr, advertised_listen_addr_with_override, control_path_for_config_path,
-        normalize_id, status_path_for_config_path, Config, PeerConfig,
+        normalize_id, status_path_for_config_path, CaptureMode, Config, PeerConfig,
     };
 
     #[test]
@@ -376,6 +403,7 @@ mod tests {
 
         assert_eq!(decoded.node.id, "local-node");
         assert_eq!(decoded.switch.hotkey, "Ctrl+Alt+Shift+K");
+        assert_eq!(decoded.switch.capture_mode, CaptureMode::Passive);
         assert_eq!(
             decoded.node.private_key,
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -449,6 +477,26 @@ mod tests {
         assert!(!config.node.private_key.is_empty());
         assert!(!config.node.public_key.is_empty());
         assert_ne!(config.node.private_key, config.node.public_key);
+    }
+
+    #[test]
+    fn legacy_switch_config_defaults_capture_mode_to_passive() {
+        let decoded: Config = toml::from_str(
+            r#"
+[node]
+id = "local-node"
+name = "Local Node"
+listen_addr = "0.0.0.0:48571"
+private_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+public_key = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+
+[switch]
+hotkey = "Ctrl+Alt+Shift+K"
+"#,
+        )
+        .expect("legacy config should deserialize");
+
+        assert_eq!(decoded.switch.capture_mode, CaptureMode::Passive);
     }
 
     #[test]

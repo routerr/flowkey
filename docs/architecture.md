@@ -64,7 +64,51 @@ At any moment, a daemon is in one of three logical states:
 - `controller`: captures local input and forwards it to the peer
 - `controlled`: receives input from the peer and injects it locally
 
-The active role flips when the local user presses the configured hotkey.
+The active role flips when the local user presses the configured hotkey. In the current implementation, controller mode does not grab or block the controller machine's own local OS behavior; it listens passively and forwards events to the peer while the local machine still reacts normally.
+
+## Exclusive Controller Mode Plan
+
+Goal: support a mode where the controller machine stops reacting locally and only the remote peer receives the input stream.
+
+Recommended delivery order:
+
+1. add a capture mode concept to `flowkey-input` and config, keeping the current passive mode as the default
+2. implement Windows-exclusive capture first with low-level hooks that can forward and suppress local events
+3. preserve the current hotkey escape path so the operator can always release control locally
+4. add explicit diagnostics when exclusive mode is requested but the platform cannot safely provide it
+5. only after Windows stabilizes, design the macOS event-tap equivalent
+
+Required architecture changes:
+
+- split the current passive `InputCapture` path into at least two behaviors: `PassiveObserve` and `ExclusiveIntercept`
+- keep event translation, hotkey handling, and loopback suppression shared, but move the OS event source behind platform-specific capture implementations
+- let the daemon choose capture behavior from config and current role instead of always constructing `LocalInputCapture`
+- add a clear fallback policy: if exclusive capture cannot start, either fail fast or downgrade to passive mode with a loud warning
+
+Windows-first implementation notes:
+
+- the current Windows capture wrapper is only a thin delegate to `LocalInputCapture`, so exclusive mode will need a new implementation rather than a flag on the existing one
+- the most likely path is a low-level keyboard/mouse hook that forwards translated events and returns suppression for normal local input while in controller mode
+- the configured hotkey must remain locally consumable even while exclusive mode is active so the user can release control without needing the remote machine
+- UIPI and interactive-session constraints still apply, so the daemon should reject exclusive mode outside a real desktop session
+
+macOS follow-up notes:
+
+- this will likely require a real filtering event tap instead of passive listening
+- Accessibility and Input Monitoring requirements will be stricter than the current passive path
+- the first macOS slice should come only after the Windows behavior and escape path are reliable
+
+Open questions to resolve before implementation:
+
+- should exclusive mode be enabled by a global config flag, a per-peer flag, or a runtime switch command
+- should failure to enter exclusive mode abort the switch, or should it continue in passive mode with an explicit warning
+- do we want keyboard-only, mouse-only, and full exclusive variants, or just one all-input mode for V1
+
+Suggested first code slice:
+
+- add config and runtime plumbing for a capture mode enum
+- introduce a Windows-specific exclusive capture type beside the current passive one
+- keep the current protocol unchanged and validate that release still restores local behavior cleanly
 
 ## Recommended Rust Workspace Layout
 

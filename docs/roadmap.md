@@ -40,12 +40,15 @@ Completed:
 - platform permission probes and richer OS-specific diagnostics
 - optional LAN discovery advertisement and browsing
 - pairing address override via config or CLI flag
+- remote SwitchRequest propagation using the controller node ID
+- local mouse-move capture initialization and forwarding
 
 Partially implemented:
 
 - daemon state machine and session recovery
 - durable reconnect strategy
 - platform-specific operator guidance and interactive-session UX
+- short end-to-end regression coverage for the validated control path
 
 ## Proposed Repository Layout
 

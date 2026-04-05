@@ -208,6 +208,7 @@ fn status_lines(config: &Config, status: Option<&DaemonStatus>) -> Vec<String> {
     let mut lines = vec![
         format!("node: {}", config.node.name),
         format!("listen: {}", config.node.listen_addr),
+        format!("capture mode: {}", config.switch.capture_mode.as_str()),
         format!(
             "state: {}",
             status

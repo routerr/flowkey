@@ -175,6 +175,8 @@ impl CaptureState {
 
 #[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 mod tests {
+    use super::CaptureState;
+    use crate::event::InputEvent;
     use crate::event::MouseButton;
     use crate::normalize::{normalize_button, normalize_key_code};
 
@@ -199,5 +201,24 @@ mod tests {
         assert_eq!(normalize_button(rdev::Button::Left), MouseButton::Left);
         assert_eq!(normalize_button(rdev::Button::Right), MouseButton::Right);
         assert_eq!(normalize_button(rdev::Button::Middle), MouseButton::Middle);
+    }
+
+    #[test]
+    fn first_mouse_move_initializes_position_and_second_emits_delta() {
+        let mut state = CaptureState::default();
+
+        let first = state.translate_event(rdev::Event {
+            event_type: rdev::EventType::MouseMove { x: 100.0, y: 200.0 },
+            time: std::time::SystemTime::now(),
+            name: None,
+        });
+        assert_eq!(first, None);
+
+        let second = state.translate_event(rdev::Event {
+            event_type: rdev::EventType::MouseMove { x: 104.0, y: 197.0 },
+            time: std::time::SystemTime::now(),
+            name: None,
+        });
+        assert_eq!(second, Some(InputEvent::MouseMove { dx: 4, dy: -3 }));
     }
 }

@@ -6,6 +6,10 @@ pub struct WindowsCapture {
     inner: LocalInputCapture,
 }
 
+pub struct WindowsExclusiveCapture {
+    inner: LocalInputCapture,
+}
+
 impl WindowsCapture {
     pub fn new(binding: HotkeyBinding) -> Self {
         Self::with_loopback(binding, None)
@@ -22,6 +26,27 @@ impl WindowsCapture {
 }
 
 impl InputCapture for WindowsCapture {
+    fn start(&mut self) -> Result<(), String> {
+        self.inner.start()
+    }
+
+    fn poll(&mut self) -> Option<CaptureSignal> {
+        self.inner.poll()
+    }
+}
+
+impl WindowsExclusiveCapture {
+    pub fn with_loopback(
+        binding: HotkeyBinding,
+        loopback: Option<SharedLoopbackSuppressor>,
+    ) -> Self {
+        Self {
+            inner: LocalInputCapture::with_loopback(binding, loopback),
+        }
+    }
+}
+
+impl InputCapture for WindowsExclusiveCapture {
     fn start(&mut self) -> Result<(), String> {
         self.inner.start()
     }
