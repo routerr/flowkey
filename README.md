@@ -46,6 +46,7 @@ Deferred until later:
 - [Architecture](./docs/architecture.md)
 - [Roadmap](./docs/roadmap.md)
 - [Protocol](./docs/protocol.md)
+- [Setup Guide](./docs/setup-guide.md)
 
 ## Current Status
 
@@ -64,6 +65,10 @@ This repo is now past the initial scaffold and has a working cross-platform cont
 - `flky switch` and `flky release` now queue local daemon control requests through a file-backed command channel
 - remote switch propagation now drives the target peer into `controlled-by`
 - local capture now emits mouse movement correctly after the first observed cursor sample
+- **Exclusive Capture (macOS)**: Local input is now suppressed while controlling a peer using `CGEventTap`.
+- **Automatic Control Resume**: Daemon now automatically restores control role after network interruptions.
+- **Reachability Probing (FRP)**: Zero-config switching using UDP racing to select the best IP among multiple interfaces.
+- **Diagnostics**: `flky doctor` command added to diagnose permissions and network setup.
 - release bundles and checksum files can be generated locally or by tagged GitHub Actions releases
 
 The remaining gaps are mostly platform hardening and UX polish rather than missing core protocol wiring.

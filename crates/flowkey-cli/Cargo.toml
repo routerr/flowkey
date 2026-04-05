@@ -19,3 +19,9 @@ flowkey-core = { path = "../flowkey-core" }
 flowkey-config = { path = "../flowkey-config" }
 flowkey-crypto = { path = "../flowkey-crypto" }
 flowkey-net = { path = "../flowkey-net" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+flowkey-platform-macos = { path = "../flowkey-platform-macos" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+flowkey-platform-windows = { path = "../flowkey-platform-windows" }

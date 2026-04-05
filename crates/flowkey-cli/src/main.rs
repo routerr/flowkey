@@ -6,6 +6,7 @@ use flowkey_crypto::{HandshakeOffer, NodeIdentity};
 use flowkey_daemon::run_daemon;
 use std::path::Path;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
@@ -36,6 +37,8 @@ enum Command {
     Release,
     /// Show basic runtime or config status
     Status,
+    /// Diagnose system permissions and network setup
+    Doctor,
 }
 
 #[derive(Debug, Subcommand)]
@@ -135,7 +138,7 @@ async fn main() -> Result<()> {
                         "{}\t{}\t{}\t{}",
                         peer.id,
                         peer.name,
-                        peer.addr,
+                        peer.addrs.join(","),
                         if trusted { "trusted" } else { "untrusted" }
                     );
                 }
@@ -178,6 +181,9 @@ async fn main() -> Result<()> {
             let status = load_status_snapshot(&status_path)?;
 
             render_status(&config, status.as_ref());
+        }
+        Command::Doctor => {
+            handle_doctor().await?;
         }
     }
 
@@ -270,6 +276,58 @@ fn active_peer_is_trusted(config: &Config, status: Option<&DaemonStatus>) -> boo
         .any(|peer| peer.id == active_peer_id && peer.trusted)
 }
 
+async fn handle_doctor() -> Result<()> {
+    println!("flky doctor - diagnosing system setup");
+    println!("------------------------------------");
+
+    // 1. OS Info
+    println!("System: {} {}", std::env::consts::OS, std::env::consts::ARCH);
+
+    // 2. Permissions (macOS/Windows)
+    #[cfg(target_os = "macos")]
+    {
+        let status = flowkey_platform_macos::permissions::PermissionStatus::probe();
+        render_doctor_check("macOS Accessibility", status.accessibility, "Enable in System Settings > Privacy & Security > Accessibility");
+        render_doctor_check("macOS Input Monitoring", status.input_monitoring, "Enable in System Settings > Privacy & Security > Input Monitoring");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let status = flowkey_platform_windows::permissions::PermissionStatus::probe();
+        render_doctor_check("Windows Interactive Session", status.interactive_session, "Run from a signed-in desktop session (not SSH/service)");
+    }
+
+    // 3. Network Bind Check
+    let config = Config::load_or_default()?;
+    let bind_addr = &config.node.listen_addr;
+    let bind_result = TcpListener::bind(bind_addr).await;
+    render_doctor_check(
+        &format!("Network Bind ({bind_addr})"),
+        bind_result.is_ok(),
+        &format!("Port may be in use or blocked by firewall: {}", bind_result.err().map(|e| e.to_string()).unwrap_or_default())
+    );
+
+    // 4. Daemon Status
+    let status_path = Config::status_path()?;
+    let daemon_running = status_path.exists();
+    render_doctor_check("Daemon Running", daemon_running, "Start with `flky daemon` to enable remote control");
+
+    // 5. Config Check
+    let config_path = Config::default_path()?;
+    render_doctor_check("Config File exists", config_path.exists(), &format!("Run `flky pair init` to create default config at {}", config_path.display()));
+
+    println!();
+    println!("Diagnostics complete.");
+    Ok(())
+}
+
+fn render_doctor_check(label: &str, ok: bool, hint: &str) {
+    let status = if ok { "PASS" } else { "FAIL" };
+    println!("{:<30} [{}]", label, status);
+    if !ok {
+        println!("  - Hint: {hint}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{active_peer_is_trusted, status_lines};
@@ -303,6 +361,7 @@ mod tests {
             vec![
                 "node: macbook-air".to_string(),
                 "listen: 0.0.0.0:48571".to_string(),
+                "capture mode: passive".to_string(),
                 "state: connected-idle".to_string(),
                 "peer: office-pc".to_string(),
                 "trusted: yes".to_string(),
@@ -324,6 +383,7 @@ mod tests {
             vec![
                 "node: Local Node".to_string(),
                 "listen: 0.0.0.0:48571".to_string(),
+                "capture mode: passive".to_string(),
                 "state: daemon-stopped".to_string(),
                 "peer: -".to_string(),
                 "trusted: no".to_string(),
