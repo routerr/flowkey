@@ -4,7 +4,10 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent
 Set-Location $repoRoot
 
-cargo build -p kms-cli --release
+& cargo build -p kms-cli --release
+if ($LASTEXITCODE -ne 0) {
+    throw "cargo build failed with exit code $LASTEXITCODE"
+}
 
 $os = "windows"
 $arch = $env:PROCESSOR_ARCHITECTURE

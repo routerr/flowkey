@@ -397,6 +397,9 @@ fn named_key(named: NamedKey) -> Option<Key> {
             NamedKey::Delete => Key::Delete,
             NamedKey::CapsLock => Key::CapsLock,
             NamedKey::NumLock => Key::Numlock,
+            #[cfg(target_os = "windows")]
+            NamedKey::ScrollLock => Key::Scroll,
+            #[cfg(not(target_os = "windows"))]
             NamedKey::ScrollLock => Key::ScrollLock,
             NamedKey::PrintScreen => Key::PrintScr,
             NamedKey::Pause => Key::Pause,
