@@ -288,7 +288,7 @@ Windows can capture, send, receive, and inject input end to end.
 
 ### Status
 
-Not started
+Partial — capture and injection backends exist. Cross-platform test confirmed events arrive and enigo attempts injection. Blocked by UIPI when daemon is not in an interactive desktop session. Needs testing from an interactive console.
 
 ## Milestone 6: macOS End-to-End Path
 
@@ -319,7 +319,7 @@ macOS can capture, send, receive, and inject input end to end.
 
 ### Status
 
-Not started
+Partial — capture works via rdev. Injection falls back to logging sink without Accessibility permission. Permission diagnostics report status but do not guide user through granting.
 
 ## Milestone 7: Cross-Platform Interop
 
@@ -349,7 +349,7 @@ macOS and Windows can control each other.
 
 ### Status
 
-Not started
+Partial — first cross-platform test (2026-04-05) confirmed: pairing, authentication, session establishment, and input event delivery all work between macOS and Windows over Tailscale. Input injection blocked by UIPI on Windows side. See [cross-platform-test-report.md](./cross-platform-test-report.md).
 
 ## Milestone 8: CLI UX and Ops Polish
 

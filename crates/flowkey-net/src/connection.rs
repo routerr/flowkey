@@ -363,7 +363,9 @@ pub async fn run_authenticated_session(
                     }
                     Message::InputEvent { sequence, event } => {
                         info!(peer = %peer_id, sequence, event = ?event, "received input event");
-                        flowkey_net_route_input_event(sink, &event)?;
+                        if let Err(error) = flowkey_net_route_input_event(sink, &event) {
+                            warn!(peer = %peer_id, %error, "input injection failed, continuing session");
+                        }
                     }
                     Message::SwitchRequest { peer_id, request_id } => {
                         warn!(peer = %peer_id, request = %request_id, "switch request received but not yet handled");

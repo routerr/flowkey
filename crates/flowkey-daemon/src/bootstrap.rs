@@ -163,12 +163,23 @@ pub async fn run_daemon(config: Config) -> Result<()> {
     let outbound_senders = Arc::clone(&session_senders);
     let outbound_loopback = Arc::clone(&loopback);
     let outbound_status_path = status_path.clone();
-    let outbound_tasks: Vec<_> = outbound_config
+    let outbound_peers: Vec<_> = outbound_config
         .peers
         .iter()
         .filter(|peer| peer.trusted)
         .filter(|peer| peer.id > outbound_config.node.id)
         .cloned()
+        .collect();
+    info!(
+        count = outbound_peers.len(),
+        node_id = %outbound_config.node.id,
+        "outbound peer candidates"
+    );
+    for peer in &outbound_peers {
+        info!(peer_id = %peer.id, addr = %peer.addr, "will connect outbound");
+    }
+    let outbound_tasks: Vec<_> = outbound_peers
+        .into_iter()
         .map(|peer| {
             let config = outbound_config.clone();
             let runtime = Arc::clone(&outbound_runtime);
@@ -178,6 +189,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
             tokio::spawn(async move {
                 let mut backoff = ReconnectBackoff::default();
                 loop {
+                    info!(peer = %peer.id, addr = %peer.addr, "attempting outbound connection");
                     match connect_and_authenticate(&config, &peer).await {
                         Ok(connection) => {
                             backoff.reset();
