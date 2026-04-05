@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file is for the next AI agent that continues `key-mouse-sharer`.
+This file is for the next AI agent that continues `flowkey`.
 
 ## What Already Works
 
@@ -22,15 +22,15 @@ This file is for the next AI agent that continues `key-mouse-sharer`.
 
 ## Important Files
 
-- [crates/kms-daemon/src/bootstrap.rs](/Users/raychang/repo/key-mouse-sharer/crates/kms-daemon/src/bootstrap.rs)
-- [crates/kms-core/src/daemon.rs](/Users/raychang/repo/key-mouse-sharer/crates/kms-core/src/daemon.rs)
-- [crates/kms-core/src/session.rs](/Users/raychang/repo/key-mouse-sharer/crates/kms-core/src/session.rs)
-- [crates/kms-crypto/src/handshake.rs](/Users/raychang/repo/key-mouse-sharer/crates/kms-crypto/src/handshake.rs)
-- [crates/kms-net/src/connection.rs](/Users/raychang/repo/key-mouse-sharer/crates/kms-net/src/connection.rs)
-- [crates/kms-net/src/frame.rs](/Users/raychang/repo/key-mouse-sharer/crates/kms-net/src/frame.rs)
-- [crates/kms-input/src/lib.rs](/Users/raychang/repo/key-mouse-sharer/crates/kms-input/src/lib.rs)
-- [crates/kms-platform-macos/src/inject.rs](/Users/raychang/repo/key-mouse-sharer/crates/kms-platform-macos/src/inject.rs)
-- [crates/kms-platform-windows/src/inject.rs](/Users/raychang/repo/key-mouse-sharer/crates/kms-platform-windows/src/inject.rs)
+- [crates/flowkey-daemon/src/bootstrap.rs](/Users/raychang/repo/flowkey/crates/flowkey-daemon/src/bootstrap.rs)
+- [crates/flowkey-core/src/daemon.rs](/Users/raychang/repo/flowkey/crates/flowkey-core/src/daemon.rs)
+- [crates/flowkey-core/src/session.rs](/Users/raychang/repo/flowkey/crates/flowkey-core/src/session.rs)
+- [crates/flowkey-crypto/src/handshake.rs](/Users/raychang/repo/flowkey/crates/flowkey-crypto/src/handshake.rs)
+- [crates/flowkey-net/src/connection.rs](/Users/raychang/repo/flowkey/crates/flowkey-net/src/connection.rs)
+- [crates/flowkey-net/src/frame.rs](/Users/raychang/repo/flowkey/crates/flowkey-net/src/frame.rs)
+- [crates/flowkey-input/src/lib.rs](/Users/raychang/repo/flowkey/crates/flowkey-input/src/lib.rs)
+- [crates/flowkey-platform-macos/src/inject.rs](/Users/raychang/repo/flowkey/crates/flowkey-platform-macos/src/inject.rs)
+- [crates/flowkey-platform-windows/src/inject.rs](/Users/raychang/repo/flowkey/crates/flowkey-platform-windows/src/inject.rs)
 
 ## Working Rules
 

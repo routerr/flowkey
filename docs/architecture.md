@@ -1,4 +1,4 @@
-# Key Mouse Sharer V1 Architecture
+# flowkey V1 Architecture
 
 ## Scope
 
@@ -52,6 +52,7 @@ Implemented now:
 - self-injected event loopback suppression while controlling a peer
 - CLI status reporting from daemon runtime snapshots
 - cross-platform cursor/key normalization for capture and injection paths
+- optional LAN discovery advertisement and browsing via mDNS
 
 ## High-Level Model
 
@@ -68,19 +69,19 @@ The active role flips when the local user presses the configured hotkey.
 ## Recommended Rust Workspace Layout
 
 ```text
-key-mouse-sharer/
+flowkey/
 ├── Cargo.toml
 ├── crates/
-│   ├── kms-cli/
-│   ├── kms-core/
-│   ├── kms-config/
-│   ├── kms-crypto/
-│   ├── kms-net/
-│   ├── kms-protocol/
-│   ├── kms-daemon/
-│   ├── kms-input/
-│   ├── kms-platform-macos/
-│   └── kms-platform-windows/
+│   ├── flowkey-cli/
+│   ├── flowkey-core/
+│   ├── flowkey-config/
+│   ├── flowkey-crypto/
+│   ├── flowkey-net/
+│   ├── flowkey-protocol/
+│   ├── flowkey-daemon/
+│   ├── flowkey-input/
+│   ├── flowkey-platform-macos/
+│   └── flowkey-platform-windows/
 └── docs/
     ├── architecture.md
     ├── roadmap.md
@@ -89,7 +90,7 @@ key-mouse-sharer/
 
 ## Crate Responsibilities
 
-### `kms-cli`
+### `flowkey-cli`
 
 User-facing command handling:
 
@@ -102,7 +103,7 @@ User-facing command handling:
 
 This crate should stay thin and delegate to library crates.
 
-### `kms-core`
+### `flowkey-core`
 
 Shared application state and orchestration:
 
@@ -115,7 +116,7 @@ Shared application state and orchestration:
 
 This crate is the heart of the app.
 
-### `kms-config`
+### `flowkey-config`
 
 Configuration and persistence:
 
@@ -127,7 +128,7 @@ Configuration and persistence:
 
 Use a simple file format such as TOML for V1.
 
-### `kms-crypto`
+### `flowkey-crypto`
 
 Authentication and encryption helpers:
 
@@ -138,7 +139,7 @@ Authentication and encryption helpers:
 
 For V1, public-key identity plus encrypted transport is enough.
 
-### `kms-net`
+### `flowkey-net`
 
 Persistent LAN connection management:
 
@@ -151,7 +152,7 @@ Persistent LAN connection management:
 
 Use one long-lived connection per peer.
 
-### `kms-protocol`
+### `flowkey-protocol`
 
 Wire-level types:
 
@@ -163,7 +164,7 @@ Wire-level types:
 
 This crate must remain very stable and well tested.
 
-### `kms-daemon`
+### `flowkey-daemon`
 
 Daemon bootstrap and process lifecycle:
 
@@ -173,7 +174,7 @@ Daemon bootstrap and process lifecycle:
 - platform-specific component wiring
 - shutdown
 
-### `kms-input`
+### `flowkey-input`
 
 Cross-platform input abstractions:
 
@@ -184,7 +185,7 @@ Cross-platform input abstractions:
 
 This crate should define traits, not force fake cross-platform uniformity.
 
-### `kms-platform-macos`
+### `flowkey-platform-macos`
 
 macOS-specific implementation:
 
@@ -194,7 +195,7 @@ macOS-specific implementation:
 - permission checks
 - permission diagnostics
 
-### `kms-platform-windows`
+### `flowkey-platform-windows`
 
 Windows-specific implementation:
 
@@ -443,7 +444,7 @@ The most important implementation rule is to keep platform-specific input handli
 If this project is implemented with multiple coding agents, use a strict orchestrator-worker pattern:
 
 - one `orchestrator` owns interfaces, milestone order, and merge decisions
-- platform workers own `kms-platform-macos` and `kms-platform-windows` separately
+- platform workers own `flowkey-platform-macos` and `flowkey-platform-windows` separately
 - protocol/network work stays isolated from platform injection work
 
 Recommended rule:

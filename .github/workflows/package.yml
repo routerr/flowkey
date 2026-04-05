@@ -27,15 +27,15 @@ jobs:
         include:
           - runner: ubuntu-latest
             script: scripts/package-linux.sh
-            artifact: kms-linux-amd64
+            artifact: flky-linux-amd64
             shell: bash
           - runner: macos-latest
             script: scripts/package-macos.sh
-            artifact: kms-macos-amd64
+            artifact: flky-macos-amd64
             shell: bash
           - runner: windows-latest
             script: scripts/package-windows.ps1
-            artifact: kms-windows-amd64
+            artifact: flky-windows-amd64
             shell: pwsh
     runs-on: ${{ matrix.runner }}
     steps:

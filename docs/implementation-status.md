@@ -20,7 +20,7 @@
 - capture suppression for self-injected events
 - platform-level suppression of self-injected events
 - CLI status reporting from daemon runtime snapshots
-- local `kms switch` and `kms release` control requests through a file-backed command channel
+- local `flky switch` and `flky release` control requests through a file-backed command channel
 - packaging scripts for install, release bundles, and CI artifact uploads
 - cross-platform cursor/key normalization
 - runtime diagnostics for local capture, injection backend, and permission hints

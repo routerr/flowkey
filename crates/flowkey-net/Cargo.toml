@@ -1,0 +1,22 @@
+[package]
+name = "flowkey-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+mdns-sd.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+flowkey-config = { path = "../flowkey-config" }
+flowkey-crypto = { path = "../flowkey-crypto" }
+flowkey-input = { path = "../flowkey-input" }
+flowkey-protocol = { path = "../flowkey-protocol" }
+
+[dev-dependencies]
+base64.workspace = true
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+rand.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "flowkey-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+flowkey-config = { path = "../flowkey-config" }
+flowkey-core = { path = "../flowkey-core" }
+flowkey-input = { path = "../flowkey-input" }
+flowkey-platform-macos = { path = "../flowkey-platform-macos" }
+flowkey-platform-windows = { path = "../flowkey-platform-windows" }
+flowkey-net = { path = "../flowkey-net" }

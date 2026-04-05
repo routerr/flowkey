@@ -1,4 +1,4 @@
-# Key Mouse Sharer V1 CLI and Protocol Spec
+# flowkey V1 CLI and Protocol Spec
 
 ## Scope
 
@@ -22,16 +22,17 @@ This document defines a minimal V1 CLI and a matching peer-to-peer daemon protoc
 ## Command Summary
 
 ```text
-kms daemon
-kms pair init
-kms pair accept <token>
-kms peers list
-kms switch <peer-id>
-kms release
-kms status
+flky daemon
+flky pair init
+flky pair accept <token>
+flky discover
+flky peers list
+flky switch <peer-id>
+flky release
+flky status
 ```
 
-## `kms daemon`
+## `flky daemon`
 
 Starts the background daemon in the foreground terminal session.
 
@@ -47,10 +48,10 @@ Starts the background daemon in the foreground terminal session.
 ### Example
 
 ```bash
-kms daemon
+flky daemon
 ```
 
-## `kms pair init`
+## `flky pair init`
 
 Creates a pairing offer token for another machine.
 
@@ -58,12 +59,13 @@ Creates a pairing offer token for another machine.
 
 - ensures local node identity exists
 - creates a short-lived pairing offer
+- advertises a LAN-reachable listen address derived from the local bind address
 - prints a copyable token
 
 ### Example
 
 ```bash
-kms pair init
+flky pair init
 ```
 
 ### Example Output
@@ -73,7 +75,7 @@ Pairing token:
 v1.pair.E3K9-9W2M.192.168.1.10:48571.base64payload
 ```
 
-## `kms pair accept <token>`
+## `flky pair accept <token>`
 
 Accepts a pairing token from another machine and stores trust.
 
@@ -87,10 +89,10 @@ Accepts a pairing token from another machine and stores trust.
 ### Example
 
 ```bash
-kms pair accept v1.pair.E3K9-9W2M.192.168.1.10:48571.base64payload
+flky pair accept v1.pair.E3K9-9W2M.192.168.1.10:48571.base64payload
 ```
 
-## `kms peers list`
+## `flky peers list`
 
 Lists known peers.
 
@@ -101,7 +103,19 @@ ID          NAME         ADDRESS             TRUSTED
 office-pc   Office PC    192.168.1.25:48571 yes
 ```
 
-## `kms switch <peer-id>`
+## `flky discover`
+
+Browses for nearby daemons advertising themselves on the local network.
+
+### Behavior
+
+- uses optional mDNS advertisement published by running daemons
+- prints discovered node ids, names, and dialable addresses
+- does not modify trust on its own
+
+This command is a convenience for same-LAN setup. The signed pairing token remains the trust mechanism.
+
+## `flky switch <peer-id>`
 
 Requests that the local daemon enter controller mode toward the selected peer.
 
@@ -113,7 +127,7 @@ Requests that the local daemon enter controller mode toward the selected peer.
 
 This command is primarily useful for scripting and diagnostics. The normal UX is still the configured hotkey.
 
-## `kms release`
+## `flky release`
 
 Returns control to the local machine and forces release of tracked remote input state.
 
@@ -122,7 +136,7 @@ Returns control to the local machine and forces release of tracked remote input 
 - writes a local release request into the config directory
 - the daemon polls that request file and clears controller mode while it is running
 
-## `kms status`
+## `flky status`
 
 Prints concise runtime status.
 
@@ -145,8 +159,8 @@ note: macOS requires Input Monitoring permission for global capture
 
 Suggested location rules:
 
-- macOS: `~/Library/Application Support/kms/config.toml`
-- Windows: `%AppData%/kms/config.toml`
+- macOS: `~/Library/Application Support/flowkey/config.toml`
+- Windows: `%AppData%/flowkey/config.toml`
 - control requests live beside the config as `control.toml`
 - daemon status snapshots live beside the config as `status.toml`
 
@@ -186,7 +200,7 @@ trusted = true
 Machine A runs:
 
 ```bash
-kms pair init
+flky pair init
 ```
 
 This produces a token containing:
@@ -205,7 +219,7 @@ This produces a token containing:
 Machine B runs:
 
 ```bash
-kms pair accept <token>
+flky pair accept <token>
 ```
 
 Machine B:

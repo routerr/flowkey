@@ -1,4 +1,4 @@
-# Key Mouse Sharer V1 Roadmap
+# flowkey V1 Roadmap
 
 ## Goal
 
@@ -37,6 +37,7 @@ Completed:
 - CLI status reporting from daemon runtime snapshots
 - cross-platform cursor/key normalization
 - platform permission probes and richer OS-specific diagnostics
+- optional LAN discovery advertisement and browsing
 
 Partially implemented:
 
@@ -46,48 +47,48 @@ Partially implemented:
 ## Proposed Repository Layout
 
 ```text
-key-mouse-sharer/
+flowkey/
 ├── Cargo.toml
 ├── crates/
-│   ├── kms-cli/
+│   ├── flowkey-cli/
 │   │   └── src/main.rs
-│   ├── kms-core/
+│   ├── flowkey-core/
 │   │   ├── src/lib.rs
 │   │   ├── src/daemon.rs
 │   │   ├── src/session.rs
 │   │   ├── src/switching.rs
 │   │   └── src/recovery.rs
-│   ├── kms-config/
+│   ├── flowkey-config/
 │   │   ├── src/lib.rs
 │   │   └── src/config.rs
-│   ├── kms-crypto/
+│   ├── flowkey-crypto/
 │   │   ├── src/lib.rs
 │   │   ├── src/identity.rs
 │   │   └── src/handshake.rs
-│   ├── kms-net/
+│   ├── flowkey-net/
 │   │   ├── src/lib.rs
 │   │   ├── src/connection.rs
 │   │   ├── src/frame.rs
 │   │   └── src/heartbeat.rs
-│   ├── kms-protocol/
+│   ├── flowkey-protocol/
 │   │   ├── src/lib.rs
 │   │   ├── src/message.rs
 │   │   └── src/input.rs
-│   ├── kms-daemon/
+│   ├── flowkey-daemon/
 │   │   ├── src/lib.rs
 │   │   └── src/bootstrap.rs
-│   ├── kms-input/
+│   ├── flowkey-input/
 │   │   ├── src/lib.rs
 │   │   ├── src/event.rs
 │   │   ├── src/capture.rs
 │   │   └── src/inject.rs
-│   ├── kms-platform-macos/
+│   ├── flowkey-platform-macos/
 │   │   ├── src/lib.rs
 │   │   ├── src/capture.rs
 │   │   ├── src/inject.rs
 │   │   ├── src/hotkey.rs
 │   │   └── src/permissions.rs
-│   └── kms-platform-windows/
+│   └── flowkey-platform-windows/
 │       ├── src/lib.rs
 │       ├── src/capture.rs
 │       ├── src/inject.rs
@@ -108,24 +109,24 @@ The repo builds as a Rust workspace and has a runnable placeholder CLI.
 ### Files
 
 - `Cargo.toml`
-- `crates/kms-cli/src/main.rs`
-- `crates/kms-core/src/lib.rs`
-- `crates/kms-daemon/src/lib.rs`
-- `crates/kms-protocol/src/lib.rs`
-- `crates/kms-config/src/lib.rs`
+- `crates/flowkey-cli/src/main.rs`
+- `crates/flowkey-core/src/lib.rs`
+- `crates/flowkey-daemon/src/lib.rs`
+- `crates/flowkey-protocol/src/lib.rs`
+- `crates/flowkey-config/src/lib.rs`
 
 ### Tasks
 
 - create workspace manifest
 - add crate skeletons
 - wire basic logging
-- add `kms daemon --help`
+- add `flky daemon --help`
 - add config file location rules
 
 ### Exit Criteria
 
 - `cargo build` passes
-- `kms --help` works
+- `flky --help` works
 - workspace structure is stable enough for later milestones
 
 ### Status
@@ -140,10 +141,10 @@ The app can load config and serialize/deserialize the minimal protocol.
 
 ### Files
 
-- `crates/kms-config/src/config.rs`
-- `crates/kms-protocol/src/message.rs`
-- `crates/kms-protocol/src/input.rs`
-- `crates/kms-net/src/frame.rs`
+- `crates/flowkey-config/src/config.rs`
+- `crates/flowkey-protocol/src/message.rs`
+- `crates/flowkey-protocol/src/input.rs`
+- `crates/flowkey-net/src/frame.rs`
 - `docs/protocol.md`
 
 ### Tasks
@@ -171,16 +172,16 @@ Two nodes can establish trust and persist peer identity.
 
 ### Files
 
-- `crates/kms-crypto/src/identity.rs`
-- `crates/kms-crypto/src/handshake.rs`
-- `crates/kms-cli/src/main.rs`
-- `crates/kms-config/src/config.rs`
+- `crates/flowkey-crypto/src/identity.rs`
+- `crates/flowkey-crypto/src/handshake.rs`
+- `crates/flowkey-cli/src/main.rs`
+- `crates/flowkey-config/src/config.rs`
 
 ### Tasks
 
 - generate persistent node keypair
-- implement `kms pair init`
-- implement `kms pair accept`
+- implement `flky pair init`
+- implement `flky pair accept`
 - store trusted peer public keys
 - define short pairing code or explicit copy-paste trust token flow
 
@@ -202,10 +203,10 @@ Two paired nodes can keep a stable encrypted session over LAN.
 
 ### Files
 
-- `crates/kms-net/src/connection.rs`
-- `crates/kms-net/src/heartbeat.rs`
-- `crates/kms-core/src/session.rs`
-- `crates/kms-daemon/src/bootstrap.rs`
+- `crates/flowkey-net/src/connection.rs`
+- `crates/flowkey-net/src/heartbeat.rs`
+- `crates/flowkey-core/src/session.rs`
+- `crates/flowkey-daemon/src/bootstrap.rs`
 
 ### Tasks
 
@@ -233,10 +234,10 @@ The daemon can enter controller/controlled/idle roles safely.
 
 ### Files
 
-- `crates/kms-core/src/daemon.rs`
-- `crates/kms-core/src/session.rs`
-- `crates/kms-core/src/switching.rs`
-- `crates/kms-core/src/recovery.rs`
+- `crates/flowkey-core/src/daemon.rs`
+- `crates/flowkey-core/src/session.rs`
+- `crates/flowkey-core/src/switching.rs`
+- `crates/flowkey-core/src/recovery.rs`
 
 ### Tasks
 
@@ -263,12 +264,12 @@ Windows can capture, send, receive, and inject input end to end.
 
 ### Files
 
-- `crates/kms-platform-windows/src/capture.rs`
-- `crates/kms-platform-windows/src/inject.rs`
-- `crates/kms-platform-windows/src/hotkey.rs`
-- `crates/kms-platform-windows/src/permissions.rs`
-- `crates/kms-input/src/capture.rs`
-- `crates/kms-input/src/inject.rs`
+- `crates/flowkey-platform-windows/src/capture.rs`
+- `crates/flowkey-platform-windows/src/inject.rs`
+- `crates/flowkey-platform-windows/src/hotkey.rs`
+- `crates/flowkey-platform-windows/src/permissions.rs`
+- `crates/flowkey-input/src/capture.rs`
+- `crates/flowkey-input/src/inject.rs`
 
 ### Tasks
 
@@ -297,10 +298,10 @@ macOS can capture, send, receive, and inject input end to end.
 
 ### Files
 
-- `crates/kms-platform-macos/src/capture.rs`
-- `crates/kms-platform-macos/src/inject.rs`
-- `crates/kms-platform-macos/src/hotkey.rs`
-- `crates/kms-platform-macos/src/permissions.rs`
+- `crates/flowkey-platform-macos/src/capture.rs`
+- `crates/flowkey-platform-macos/src/inject.rs`
+- `crates/flowkey-platform-macos/src/hotkey.rs`
+- `crates/flowkey-platform-macos/src/permissions.rs`
 
 ### Tasks
 
@@ -328,10 +329,10 @@ macOS and Windows can control each other.
 
 ### Files
 
-- `crates/kms-protocol/src/input.rs`
-- `crates/kms-platform-macos/src/inject.rs`
-- `crates/kms-platform-windows/src/inject.rs`
-- `crates/kms-core/src/recovery.rs`
+- `crates/flowkey-protocol/src/input.rs`
+- `crates/flowkey-platform-macos/src/inject.rs`
+- `crates/flowkey-platform-windows/src/inject.rs`
+- `crates/flowkey-core/src/recovery.rs`
 
 ### Tasks
 
@@ -358,8 +359,8 @@ The tool is easy to run and diagnose from the terminal.
 
 ### Files
 
-- `crates/kms-cli/src/main.rs`
-- `crates/kms-config/src/config.rs`
+- `crates/flowkey-cli/src/main.rs`
+- `crates/flowkey-config/src/config.rs`
 - `docs/architecture.md`
 - `docs/protocol.md`
 - `README.md`
@@ -390,10 +391,10 @@ V1 survives real-world Wi-Fi and session edge cases.
 
 ### Files
 
-- `crates/kms-core/src/recovery.rs`
-- `crates/kms-net/src/connection.rs`
-- `crates/kms-platform-macos/src/capture.rs`
-- `crates/kms-platform-windows/src/capture.rs`
+- `crates/flowkey-core/src/recovery.rs`
+- `crates/flowkey-net/src/connection.rs`
+- `crates/flowkey-platform-macos/src/capture.rs`
+- `crates/flowkey-platform-windows/src/capture.rs`
 - `tests/` integration test files when introduced
 
 ### Tasks
@@ -470,7 +471,7 @@ Explicitly defer these until after the core path is stable:
 - file transfer
 - screen-edge switching
 - multi-peer selection
-- auto-discovery
+- zero-config trust beyond explicit discovery plus pairing
 - GUI companion
 - internet relay mode
 - multi-monitor mapping
@@ -501,20 +502,20 @@ Recommended pattern:
 Suggested ownership boundaries:
 
 - `worker 1`
-  - `crates/kms-protocol/`
-  - `crates/kms-config/`
-  - `crates/kms-crypto/`
-  - `crates/kms-net/`
+  - `crates/flowkey-protocol/`
+  - `crates/flowkey-config/`
+  - `crates/flowkey-crypto/`
+  - `crates/flowkey-net/`
 - `worker 2`
-  - `crates/kms-platform-windows/`
-  - Windows-facing parts of `crates/kms-input/`
+  - `crates/flowkey-platform-windows/`
+  - Windows-facing parts of `crates/flowkey-input/`
 - `worker 3`
-  - `crates/kms-platform-macos/`
-  - macOS-facing parts of `crates/kms-input/`
+  - `crates/flowkey-platform-macos/`
+  - macOS-facing parts of `crates/flowkey-input/`
 - `orchestrator`
-  - `crates/kms-core/`
-  - `crates/kms-daemon/`
-  - `crates/kms-cli/`
+  - `crates/flowkey-core/`
+  - `crates/flowkey-daemon/`
+  - `crates/flowkey-cli/`
   - docs and integration decisions
 
 Rules to avoid multi-agent drift:

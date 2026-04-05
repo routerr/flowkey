@@ -1,15 +1,15 @@
 [workspace]
 members = [
-    "crates/kms-cli",
-    "crates/kms-core",
-    "crates/kms-config",
-    "crates/kms-crypto",
-    "crates/kms-net",
-    "crates/kms-protocol",
-    "crates/kms-daemon",
-    "crates/kms-input",
-    "crates/kms-platform-macos",
-    "crates/kms-platform-windows",
+    "crates/flowkey-cli",
+    "crates/flowkey-core",
+    "crates/flowkey-config",
+    "crates/flowkey-crypto",
+    "crates/flowkey-net",
+    "crates/flowkey-protocol",
+    "crates/flowkey-daemon",
+    "crates/flowkey-input",
+    "crates/flowkey-platform-macos",
+    "crates/flowkey-platform-windows",
 ]
 resolver = "2"
 
@@ -23,6 +23,7 @@ authors = ["Ray Chang"]
 anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
+mdns-sd = "0.19"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

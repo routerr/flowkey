@@ -1,0 +1,21 @@
+[package]
+name = "flowkey-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flky"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+flowkey-daemon = { path = "../flowkey-daemon" }
+flowkey-core = { path = "../flowkey-core" }
+flowkey-config = { path = "../flowkey-config" }
+flowkey-crypto = { path = "../flowkey-crypto" }
+flowkey-net = { path = "../flowkey-net" }

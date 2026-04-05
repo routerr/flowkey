@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-cargo build -p kms-cli --release
+cargo build -p flowkey-cli --release
 
 arch="$(uname -m)"
 case "$arch" in
@@ -11,18 +11,18 @@ case "$arch" in
     aarch64|arm64) arch="arm64" ;;
 esac
 
-bundle_root="dist/kms-macos-${arch}"
-app_bundle="$bundle_root/kms.app"
+bundle_root="dist/flky-macos-${arch}"
+app_bundle="$bundle_root/flky.app"
 contents_dir="$app_bundle/Contents"
 macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
-archive_path="dist/kms-macos-${arch}.dmg"
+archive_path="dist/flky-macos-${arch}.dmg"
 
 rm -rf "$bundle_root" "$archive_path" "${archive_path}.sha256"
 mkdir -p "$macos_dir" "$resources_dir"
 
-cp "target/release/kms" "$macos_dir/kms"
-chmod +x "$macos_dir/kms"
+cp "target/release/flky" "$macos_dir/flky"
+chmod +x "$macos_dir/flky"
 
 cat > "$contents_dir/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -30,17 +30,17 @@ cat > "$contents_dir/Info.plist" <<'EOF'
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>kms</string>
+    <string>flky</string>
     <key>CFBundleDisplayName</key>
-    <string>kms</string>
+    <string>flowkey</string>
     <key>CFBundleIdentifier</key>
-    <string>com.key-mouse-sharer.kms</string>
+    <string>dev.flowkey.flky</string>
     <key>CFBundleVersion</key>
     <string>0.1.0</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleExecutable</key>
-    <string>kms</string>
+    <string>flky</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
 </dict>
@@ -54,13 +54,13 @@ cp scripts/install.sh "$resources_dir/install.sh"
 chmod +x "$resources_dir/install.sh"
 
 cat > "$resources_dir/INSTALL.txt" <<'EOF'
-Open Terminal and run the `kms` binary from this app bundle or move it onto your PATH.
+Open Terminal and run the `flky` binary from this app bundle or move it onto your PATH.
 For a Cargo-based install, run the bundled `install.sh`.
 The binary reads config from the platform-specific application data directory
-unless `KMS_CONFIG` is set.
+unless `FLKY_CONFIG` is set.
 EOF
 
-hdiutil create -volname kms -srcfolder "$app_bundle" -ov -format UDZO "$archive_path"
+hdiutil create -volname flowkey -srcfolder "$app_bundle" -ov -format UDZO "$archive_path"
 shasum -a 256 "$archive_path" | awk '{print $1 "  " $2}' > "${archive_path}.sha256"
 
 echo "created $archive_path"

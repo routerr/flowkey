@@ -1,6 +1,6 @@
-# key-mouse-sharer
+# flowkey
 
-CLI-first Rust workspace for a LAN-only keyboard and mouse sharing tool targeting macOS and Windows.
+flowkey is a CLI-first Rust workspace for a LAN-only keyboard and mouse sharing tool targeting macOS and Windows.
 
 ## V1 Scope
 
@@ -25,16 +25,16 @@ Deferred until later:
 ├── Cargo.toml
 ├── scripts/
 ├── crates/
-│   ├── kms-cli/
-│   ├── kms-core/
-│   ├── kms-config/
-│   ├── kms-crypto/
-│   ├── kms-net/
-│   ├── kms-protocol/
-│   ├── kms-daemon/
-│   ├── kms-input/
-│   ├── kms-platform-macos/
-│   └── kms-platform-windows/
+│   ├── flowkey-cli/
+│   ├── flowkey-core/
+│   ├── flowkey-config/
+│   ├── flowkey-crypto/
+│   ├── flowkey-net/
+│   ├── flowkey-protocol/
+│   ├── flowkey-daemon/
+│   ├── flowkey-input/
+│   ├── flowkey-platform-macos/
+│   └── flowkey-platform-windows/
 └── docs/
     ├── architecture.md
     ├── protocol.md
@@ -61,7 +61,7 @@ This repo is now past the initial scaffold and has a working trust and transport
 - daemon hotkey watcher now flips controller state on supported platforms
 - captured local input now forwards to the active peer session on supported platforms
 - hotkey activation chords are suppressed so the switch shortcut does not leak into the forwarded stream
-- `kms switch` and `kms release` now queue local daemon control requests through a file-backed command channel
+- `flky switch` and `flky release` now queue local daemon control requests through a file-backed command channel
 - release bundles and checksum files can be generated locally or by tagged GitHub Actions releases
 
 The code is intentionally thin right now. The goal is to provide a clean foundation for incremental implementation rather than pretend the hard platform-specific behavior already exists.
@@ -87,6 +87,8 @@ To install the CLI into Cargo's bin directory:
 ./scripts/install.sh
 ```
 
+This installs the `flky` binary.
+
 On Windows:
 
 ```powershell
@@ -96,7 +98,7 @@ On Windows:
 If you prefer the direct Cargo command, use:
 
 ```bash
-cargo install --path crates/kms-cli --locked --force
+cargo install --path crates/flowkey-cli --locked --force
 ```
 
 To build a portable release bundle for the current platform:
@@ -122,31 +124,31 @@ Release outputs are currently:
 ### Run Help
 
 ```bash
-cargo run -p kms-cli -- --help
+flky --help
 ```
 
 ### Start the Placeholder Daemon
 
 ```bash
-cargo run -p kms-cli -- daemon
+flky daemon
 ```
 
 ## Config
 
 By default, the CLI looks for config at:
 
-- macOS: `~/Library/Application Support/kms/config.toml`
-- Windows: `%AppData%/kms/config.toml`
+- macOS: `~/Library/Application Support/flowkey/config.toml`
+- Windows: `%AppData%/flowkey/config.toml`
 
 The daemon also uses sibling files in the same directory for runtime state:
 
-- `control.toml` for queued `kms switch` and `kms release` requests
-- `status.toml` for the live daemon snapshot used by `kms status`
+- `control.toml` for queued `flky switch` and `flky release` requests
+- `status.toml` for the live daemon snapshot used by `flky status`
 
 You can override that path with:
 
 ```bash
-KMS_CONFIG=/absolute/path/to/config.toml cargo run -p kms-cli -- status
+FLKY_CONFIG=/absolute/path/to/config.toml cargo run -p flowkey-cli -- status
 ```
 
 Current behavior:
@@ -154,23 +156,24 @@ Current behavior:
 - if the config file exists, it is loaded
 - if it does not exist, the CLI falls back to built-in defaults
 
-Running `kms pair init` or `kms daemon` will create and persist a config automatically if one does not exist yet.
+Running `flky pair init` or `flky daemon` will create and persist a config automatically if one does not exist yet.
 
 ## Commands
 
-The CLI surface is still small, but the core commands are wired and `kms status` now reads the daemon runtime snapshot:
+The CLI surface is still small, but the core commands are wired and `flky status` now reads the daemon runtime snapshot:
 
 ```text
-kms daemon
-kms pair init
-kms pair accept <token>
-kms peers list
-kms switch <peer-id>
-kms release
-kms status
+flky daemon
+flky pair init
+flky pair accept <token>
+flky discover
+flky peers list
+flky switch <peer-id>
+flky release
+flky status
 ```
 
-`kms switch` and `kms release` write a command file into the local config directory, and the daemon watches that file while it is running.
+`flky switch` and `flky release` write a command file into the local config directory, and the daemon watches that file while it is running.
 
 The daemon runtime now tracks authenticated peers, active peer selection, controller mode transitions, active-session forwarding for captured local input, hotkey chord suppression, shared cursor/key normalization, and local control commands on supported platforms.
 
@@ -181,13 +184,13 @@ Current pairing is a simple local trust flow:
 1. On machine A:
 
 ```bash
-cargo run -p kms-cli -- pair init
+cargo run -p flowkey-cli -- pair init
 ```
 
 2. Copy the printed token to machine B and run:
 
 ```bash
-cargo run -p kms-cli -- pair accept '<token>'
+cargo run -p flowkey-cli -- pair accept '<token>'
 ```
 
 3. Repeat in the opposite direction if you want explicit mutual trust on both machines.
@@ -195,17 +198,23 @@ cargo run -p kms-cli -- pair accept '<token>'
 4. Inspect stored peers with:
 
 ```bash
-cargo run -p kms-cli -- peers
+cargo run -p flowkey-cli -- peers
+```
+
+If both daemons are already running on the same LAN, you can discover nearby nodes first:
+
+```bash
+cargo run -p flowkey-cli -- discover
 ```
 
 What is real now:
 
 - each node gets a persisted Ed25519 keypair
-- `pair init` creates a signed pairing offer
+- `pair init` creates a signed pairing offer and advertises a LAN-reachable listen address
 - `pair accept` verifies the signature before storing trust
-- `kms-net` has a working TCP hello plus mutual signed challenge/response handshake path
+- `flowkey-net` has a working TCP hello plus mutual signed challenge/response handshake path
 - the daemon now binds a listener, accepts trusted peers, tracks authenticated sessions, and forwards captured local input to the active peer session
-- `kms switch` and `kms release` write a local command file that the daemon consumes and applies
+- `flky switch` and `flky release` write a local command file that the daemon consumes and applies
 
 What is still not done yet:
 
@@ -221,16 +230,16 @@ What now also works:
 
 ## Implementation Notes
 
-- `kms-core` owns state transitions and recovery logic
-- `kms-protocol` owns the wire contract
-- `kms-net` will own connection and heartbeat behavior
-- `kms-platform-macos` and `kms-platform-windows` will own platform-specific capture and injection
-- `kms-cli` should stay thin
+- `flowkey-core` owns state transitions and recovery logic
+- `flowkey-protocol` owns the wire contract
+- `flowkey-net` will own connection and heartbeat behavior
+- `flowkey-platform-macos` and `flowkey-platform-windows` will own platform-specific capture and injection
+- `flowkey-cli` should stay thin
 
 ## Suggested Next Steps
 
-1. Implement config loading in `kms-config`
-2. Define protocol messages in `kms-protocol`
-3. Wire daemon state in `kms-core`
-4. Add pairing primitives in `kms-crypto`
+1. Implement config loading in `flowkey-config`
+2. Define protocol messages in `flowkey-protocol`
+3. Wire daemon state in `flowkey-core`
+4. Add pairing primitives in `flowkey-crypto`
 5. Build one-platform end-to-end proof before full cross-platform polish
