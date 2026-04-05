@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use flowkey_config::{CaptureMode, Config};
-use flowkey_core::daemon::{DaemonRuntime, DaemonState};
+use flowkey_core::daemon::{DaemonRuntime, DaemonState, Role};
 use flowkey_core::recovery::ReconnectBackoff;
 use flowkey_core::DaemonCommand;
 use flowkey_core::DaemonStatus;
@@ -33,12 +34,20 @@ pub async fn run_daemon(config: Config) -> Result<()> {
         .listen_addr
         .parse()
         .with_context(|| format!("invalid listen address {}", config.node.listen_addr))?;
+        
+    let probe_addr = config.node.listen_addr.clone();
+    let local_id = config.node.id.clone();
+    tokio::spawn(async move {
+        flowkey_net::probe::listen_for_probes(probe_addr, local_id).await;
+    });
+
     let status_path = Config::status_path()?;
     let control_path = Config::control_path()?;
     let listener = TcpListener::bind(listen_addr)
         .await
         .with_context(|| format!("failed to bind {}", config.node.listen_addr))?;
     let runtime: Arc<Mutex<DaemonRuntime>> = Arc::new(Mutex::new(DaemonRuntime::new()));
+    let suppression_state = Arc::new(AtomicBool::new(false));
     let session_senders: Arc<Mutex<HashMap<String, SessionSender>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let loopback = LoopbackSuppressor::shared(Duration::from_millis(40));
@@ -83,12 +92,14 @@ pub async fn run_daemon(config: Config) -> Result<()> {
         status_path.clone(),
         hotkey_binding,
         config.switch.capture_mode,
+        Arc::clone(&suppression_state),
     );
     spawn_control_watcher(
         Arc::clone(&runtime),
         Arc::clone(&session_senders),
         control_path.clone(),
         status_path.clone(),
+        Arc::clone(&suppression_state),
     );
 
     let incoming_config = config.clone();
@@ -96,6 +107,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
     let incoming_senders = Arc::clone(&session_senders);
     let incoming_loopback = Arc::clone(&loopback);
     let incoming_status_path = status_path.clone();
+    let incoming_suppression_state = Arc::clone(&suppression_state);
     let incoming_task = tokio::spawn(async move {
         loop {
             let (stream, addr) = match listener.accept().await {
@@ -111,16 +123,36 @@ pub async fn run_daemon(config: Config) -> Result<()> {
             let session_senders = Arc::clone(&incoming_senders);
             let loopback = Arc::clone(&incoming_loopback);
             let status_path = incoming_status_path.clone();
+            let suppression_state = Arc::clone(&incoming_suppression_state);
             tokio::spawn(async move {
                 match flowkey_net::connection::authenticate_incoming_stream(&config, stream).await {
                     Ok(connection) => {
                         let peer_id = connection.info.peer_id.clone();
-                        runtime
+                        let resumed_role = runtime
                             .lock()
                             .expect("daemon runtime mutex should not be poisoned")
                             .mark_authenticated(peer_id.clone());
+
                         let (sender, receiver) = session_channel();
+
+                        if resumed_role == Some(Role::Controlling) {
+                            let request_id = uuid::Uuid::new_v4().to_string();
+                            info!(peer = %peer_id, "automatically resuming control session");
+                            if let Err(error) = sender.send_switch(request_id) {
+                                tracing::warn!(peer = %peer_id, %error, "failed to send resume switch request");
+                            } else {
+                                let mut runtime_guard = runtime
+                                    .lock()
+                                    .expect("daemon runtime mutex should not be poisoned");
+                                if !matches!(runtime_guard.state, DaemonState::Controlling { .. }) {
+                                    let _ = runtime_guard.toggle_controller();
+                                }
+                                suppression_state.store(true, std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }
+
                         let sender_count = {
+
                             let mut senders = session_senders
                                 .lock()
                                 .expect("session sender registry should not be poisoned");
@@ -148,6 +180,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                         let callback = DaemonSessionCallback {
                             runtime: Arc::clone(&runtime),
                             status_path: status_path.clone(),
+                            suppression_state: Arc::clone(&suppression_state),
                         };
                         if let Err(error) = run_authenticated_session(
                             connection,
@@ -182,6 +215,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
     let outbound_senders = Arc::clone(&session_senders);
     let outbound_loopback = Arc::clone(&loopback);
     let outbound_status_path = status_path.clone();
+    let outbound_suppression_state = Arc::clone(&suppression_state);
     let outbound_tasks: Vec<_> = outbound_config
         .peers
         .iter()
@@ -194,19 +228,55 @@ pub async fn run_daemon(config: Config) -> Result<()> {
             let session_senders = Arc::clone(&outbound_senders);
             let loopback = Arc::clone(&outbound_loopback);
             let status_path = outbound_status_path.clone();
+            let suppression_state = Arc::clone(&outbound_suppression_state);
             tokio::spawn(async move {
                 let mut backoff = ReconnectBackoff::default();
                 loop {
-                    info!(peer = %peer.id, addr = %peer.addr, "attempting outbound connection");
-                    match connect_and_authenticate(&config, &peer).await {
+                    let mut current_addr = peer.addr.clone();
+                    
+                    // Discover fresh IPs and race them
+                    if let Ok(Ok(discovered)) = tokio::task::spawn_blocking(|| flowkey_net::discovery::discover(Duration::from_secs(1))).await {
+                        if let Some(discovered_peer) = discovered.into_iter().find(|p| p.id == peer.id) {
+                            let mut candidates = discovered_peer.addrs.clone();
+                            if !candidates.contains(&current_addr) {
+                                candidates.push(current_addr.clone());
+                            }
+                            
+                            if let Ok(winner) = flowkey_net::probe::run_reachability_race(&candidates, &peer.id, Duration::from_millis(500)).await {
+                                current_addr = winner;
+                            }
+                        }
+                    }
+
+                    info!(peer = %peer.id, addr = %current_addr, "attempting outbound connection");
+                    let mut dynamic_peer = peer.clone();
+                    dynamic_peer.addr = current_addr;
+                    match connect_and_authenticate(&config, &dynamic_peer).await {
                         Ok(connection) => {
                             backoff.reset();
                             let peer_id = connection.info.peer_id.clone();
-                            runtime
+                            let resumed_role = runtime
                                 .lock()
                                 .expect("daemon runtime mutex should not be poisoned")
                                 .mark_authenticated(peer_id.clone());
                             let (sender, receiver) = session_channel();
+                            
+                            if resumed_role == Some(Role::Controlling) {
+                                let request_id = uuid::Uuid::new_v4().to_string();
+                                info!(peer = %peer_id, "automatically resuming control session");
+                                if let Err(error) = sender.send_switch(request_id) {
+                                    tracing::warn!(peer = %peer_id, %error, "failed to send resume switch request");
+                                } else {
+                                    // Make sure we actually transition to Controlling locally.
+                                    let mut runtime_guard = runtime
+                                        .lock()
+                                        .expect("daemon runtime mutex should not be poisoned");
+                                    if !matches!(runtime_guard.state, DaemonState::Controlling { .. }) {
+                                        let _ = runtime_guard.toggle_controller();
+                                    }
+                                    suppression_state.store(true, std::sync::atomic::Ordering::SeqCst);
+                                }
+                            }
                             let sender_count = {
                                 let mut senders = session_senders
                                     .lock()
@@ -235,6 +305,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                             let callback = DaemonSessionCallback {
                                 runtime: Arc::clone(&runtime),
                                 status_path: status_path.clone(),
+                                suppression_state: Arc::clone(&suppression_state),
                             };
                             if let Err(error) = run_authenticated_session(
                                 connection,
@@ -269,9 +340,17 @@ pub async fn run_daemon(config: Config) -> Result<()> {
 
     tokio::select! {
         _ = signal::ctrl_c() => {
-            info!("shutdown requested");
+            info!("shutdown requested via Ctrl+C");
         }
     }
+
+    info!("cleaning up system state before exit");
+    suppression_state.store(false, Ordering::SeqCst);
+    
+    // Create a temporary sink to flush any held keys/buttons
+    let loopback = LoopbackSuppressor::shared(Duration::from_millis(0));
+    let (mut sink, _, _) = create_platform_input_sink(loopback);
+    let _ = sink.release_all();
 
     incoming_task.abort();
     for task in outbound_tasks {
@@ -298,11 +377,13 @@ fn spawn_hotkey_watcher(
     status_path: PathBuf,
     binding: HotkeyBinding,
     capture_mode: CaptureMode,
+    suppression_state: Arc<AtomicBool>,
 ) {
-    let (mut capture, capture_note): (Box<dyn InputCapture>, Option<String>) = create_platform_input_capture(binding, loopback, capture_mode);
+    let (mut capture, capture_note): (Box<dyn InputCapture>, Option<String>) =
+        create_platform_input_capture(binding, loopback, capture_mode, Arc::clone(&suppression_state));
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let _ = (&runtime, &session_senders, &status_path, capture_mode);
+    let _ = (&runtime, &session_senders, &status_path, capture_mode, suppression_state);
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
@@ -341,7 +422,7 @@ fn spawn_hotkey_watcher(
         persist_status_snapshot(&runtime, &status_path);
 
         thread::spawn(move || loop {
-            match capture.poll() {
+            match capture.wait() {
                 Some(CaptureSignal::HotkeyPressed) => {
                     let result = {
                         let mut runtime = runtime
@@ -351,6 +432,16 @@ fn spawn_hotkey_watcher(
                             Ok(()) => {
                                 let state = runtime.state.clone();
                                 let peer = runtime.active_peer_id.clone();
+
+                                match &state {
+                                    DaemonState::Controlling { .. } => {
+                                        capture.set_suppression_enabled(true);
+                                    }
+                                    _ => {
+                                        capture.set_suppression_enabled(false);
+                                    }
+                                }
+
                                 Ok((state, peer))
                             }
                             Err(error) => Err(error),
@@ -426,7 +517,7 @@ fn spawn_hotkey_watcher(
                         }
                     }
                 }
-                None => thread::sleep(Duration::from_millis(10)),
+                None => {}
             }
         });
     }
@@ -437,6 +528,7 @@ fn spawn_control_watcher(
     session_senders: Arc<Mutex<HashMap<String, SessionSender>>>,
     control_path: PathBuf,
     status_path: PathBuf,
+    suppression_state: Arc<AtomicBool>,
 ) {
     thread::spawn(move || loop {
         if !control_path.exists() {
@@ -454,7 +546,13 @@ fn spawn_control_watcher(
             }
         };
 
-        match handle_control_command(command, &runtime, &session_senders, &status_path) {
+        match handle_control_command(
+            command,
+            &runtime,
+            &session_senders,
+            &status_path,
+            &suppression_state,
+        ) {
             Ok(()) => {
                 let _ = fs::remove_file(&control_path);
             }
@@ -473,6 +571,7 @@ fn handle_control_command(
     runtime: &Arc<Mutex<DaemonRuntime>>,
     session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
     status_path: &std::path::Path,
+    suppression_state: &Arc<AtomicBool>,
 ) -> Result<(), String> {
     match command {
         DaemonCommand::Switch { peer_id } => {
@@ -490,6 +589,10 @@ fn handle_control_command(
                 runtime.select_active_peer(peer_id.clone())?;
                 if !matches!(runtime.state, DaemonState::Controlling { .. }) {
                     runtime.toggle_controller()?;
+                }
+
+                if matches!(runtime.state, DaemonState::Controlling { .. }) {
+                    suppression_state.store(true, Ordering::SeqCst);
                 }
 
                 (runtime.state.clone(), runtime.active_peer_id.clone())
@@ -518,6 +621,7 @@ fn handle_control_command(
                     .expect("daemon runtime mutex should not be poisoned");
                 runtime.release_control()?;
             }
+            suppression_state.store(false, Ordering::SeqCst);
             persist_status_snapshot(runtime, status_path);
             if let Some(peer_id) = &active_peer {
                 notify_peer_release(peer_id, session_senders);
@@ -598,6 +702,7 @@ fn notify_peer_release(
         } else {
             info!(peer = %peer_id, request = %request_label, "release request queued onto session channel");
         }
+        let _ = sender.send_release_all();
     } else {
         warn!(
             peer = %peer_id,
@@ -621,6 +726,7 @@ fn generate_request_id() -> String {
 struct DaemonSessionCallback {
     runtime: Arc<Mutex<DaemonRuntime>>,
     status_path: PathBuf,
+    suppression_state: Arc<AtomicBool>,
 }
 
 impl SessionStateCallback for DaemonSessionCallback {
@@ -635,6 +741,7 @@ impl SessionStateCallback for DaemonSessionCallback {
         };
         match result {
             Ok(()) => {
+                self.suppression_state.store(false, Ordering::SeqCst);
                 persist_status_snapshot(&self.runtime, &self.status_path);
                 let state_after = self
                     .runtime
@@ -673,6 +780,7 @@ impl SessionStateCallback for DaemonSessionCallback {
         };
         match result {
             Ok(()) => {
+                self.suppression_state.store(false, Ordering::SeqCst);
                 persist_status_snapshot(&self.runtime, &self.status_path);
                 let state_after = self
                     .runtime
@@ -754,13 +862,14 @@ fn create_platform_input_capture(
     binding: HotkeyBinding,
     loopback: SharedLoopbackSuppressor,
     capture_mode: CaptureMode,
+    suppression_state: Arc<AtomicBool>,
 ) -> (Box<dyn InputCapture>, Option<String>) {
     #[cfg(target_os = "macos")]
     {
         let note = match capture_mode {
             CaptureMode::Passive => None,
             CaptureMode::Exclusive => Some(
-                "exclusive capture mode requested on macOS; using passive capture until filtering event-tap support is implemented"
+                "exclusive capture mode enabled on macOS; using CGEventTap for input suppression"
                     .to_string(),
             ),
         };
@@ -769,6 +878,8 @@ fn create_platform_input_capture(
             Box::new(flowkey_platform_macos::capture::MacosCapture::with_loopback(
                 binding,
                 Some(loopback),
+                matches!(capture_mode, CaptureMode::Exclusive),
+                suppression_state,
             )),
             note,
         );
@@ -789,12 +900,14 @@ fn create_platform_input_capture(
                 flowkey_platform_windows::capture::WindowsCapture::with_loopback(
                     binding,
                     Some(loopback),
+                    suppression_state,
                 ),
             ),
             CaptureMode::Exclusive => Box::new(
                 flowkey_platform_windows::capture::WindowsExclusiveCapture::with_loopback(
                     binding,
                     Some(loopback),
+                    suppression_state,
                 ),
             ),
         };
@@ -993,7 +1106,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use flowkey_core::daemon::{DaemonRuntime, DaemonState};
+    use flowkey_core::daemon::{DaemonRuntime, DaemonState, Role};
     use flowkey_core::status::DaemonStatus;
     use flowkey_input::event::InputEvent;
     use flowkey_input::InputEventSink;
@@ -1114,7 +1227,7 @@ mod tests {
             .expect("status snapshot should persist after lost session");
         fs::remove_file(&status_path).ok();
 
-        assert_eq!(runtime.state, DaemonState::Recovering);
+        assert_eq!(runtime.state, DaemonState::Recovering { intended_role: Some(Role::Controlling) });
         assert_eq!(runtime.active_peer_id.as_deref(), Some(peer_id));
         assert!(senders.get(spare_peer_id).is_some());
         assert!(senders.get(peer_id).is_none());

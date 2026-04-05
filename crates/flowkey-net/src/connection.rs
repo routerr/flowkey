@@ -37,6 +37,7 @@ pub enum SessionCommand {
     Input(InputEvent),
     SwitchControl { request_id: String },
     ReleaseControl { request_id: String },
+    ReleaseAll,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +61,12 @@ impl SessionSender {
     pub fn send_release(&self, request_id: String) -> Result<(), String> {
         self.sender
             .send(SessionCommand::ReleaseControl { request_id })
+            .map_err(|_| "session command channel closed".to_string())
+    }
+
+    pub fn send_release_all(&self) -> Result<(), String> {
+        self.sender
+            .send(SessionCommand::ReleaseAll)
             .map_err(|_| "session command channel closed".to_string())
     }
 }
@@ -358,6 +365,7 @@ pub async fn run_authenticated_session(
     let mut sequence: u64 = 0;
     let peer_id = connection.info.peer_id.clone();
     let stream = &mut connection.stream;
+    stream.set_nodelay(true)?;
 
     loop {
         tokio::select! {
@@ -381,6 +389,12 @@ pub async fn run_authenticated_session(
                     Some(SessionCommand::ReleaseControl { request_id }) => {
                         info!(peer = %peer_id, request = %request_id, "writing SwitchRelease to session stream");
                         write_message(stream, &Message::SwitchRelease { request_id }).await?;
+                    }
+                    Some(SessionCommand::ReleaseAll) => {
+                        info!(peer = %peer_id, "locally releasing all input state");
+                        if let Err(error) = sink.release_all() {
+                            warn!(peer = %peer_id, %error, "failed to release input state locally");
+                        }
                     }
                     None => {
                         info!(peer = %peer_id, "session command channel closed");
@@ -412,6 +426,7 @@ pub async fn run_authenticated_session(
                     }
                     Message::SwitchRelease { request_id } => {
                         info!(peer = %peer_id, request = %request_id, "remote peer released control");
+                        let _ = sink.release_all();
                         state_callback.on_remote_release(&peer_id, &request_id);
                     }
                     Message::Error { code, message } => {

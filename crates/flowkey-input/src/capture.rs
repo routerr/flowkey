@@ -17,6 +17,8 @@ pub enum CaptureSignal {
 pub trait InputCapture: Send {
     fn start(&mut self) -> Result<(), String>;
     fn poll(&mut self) -> Option<CaptureSignal>;
+    fn wait(&mut self) -> Option<CaptureSignal>;
+    fn set_suppression_enabled(&mut self, enabled: bool);
 }
 
 #[derive(Debug)]
@@ -89,18 +91,28 @@ impl InputCapture for LocalInputCapture {
             .as_ref()
             .and_then(|receiver| receiver.try_recv().ok())
     }
+
+    fn wait(&mut self) -> Option<CaptureSignal> {
+        self.receiver
+            .as_ref()
+            .and_then(|receiver| receiver.recv().ok())
+    }
+
+    fn set_suppression_enabled(&mut self, _enabled: bool) {
+        // LocalInputCapture is passive and does not support suppression
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Default)]
-struct CaptureState {
-    last_mouse_position: Option<(f64, f64)>,
-    modifiers: Modifiers,
+pub struct CaptureState {
+    pub last_mouse_position: Option<(f64, f64)>,
+    pub modifiers: Modifiers,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl CaptureState {
-    fn translate(
+    pub fn translate(
         &mut self,
         event: rdev::Event,
         tracker: &mut HotkeyTracker,
@@ -126,15 +138,18 @@ impl CaptureState {
         Some(CaptureSignal::Input(input))
     }
 
-    fn translate_event(&mut self, event: rdev::Event) -> Option<InputEvent> {
+    pub fn translate_event(&mut self, event: rdev::Event) -> Option<InputEvent> {
+        let modifiers = self.modifiers;
         match event.event_type {
             rdev::EventType::KeyPress(key) => self.translate_key_event(key, true),
             rdev::EventType::KeyRelease(key) => self.translate_key_event(key, false),
             rdev::EventType::ButtonPress(button) => Some(InputEvent::MouseButtonDown {
                 button: normalize_button(button),
+                modifiers,
             }),
             rdev::EventType::ButtonRelease(button) => Some(InputEvent::MouseButtonUp {
                 button: normalize_button(button),
+                modifiers,
             }),
             rdev::EventType::MouseMove { x, y } => {
                 let last_position = self.last_mouse_position;
@@ -143,16 +158,21 @@ impl CaptureState {
                 Some(InputEvent::MouseMove {
                     dx: delta.0,
                     dy: delta.1,
+                    modifiers,
                 })
             }
             rdev::EventType::Wheel { delta_x, delta_y } => {
                 let (delta_x, delta_y) = normalize_wheel_delta(delta_x as f64, delta_y as f64)?;
-                Some(InputEvent::MouseWheel { delta_x, delta_y })
+                Some(InputEvent::MouseWheel {
+                    delta_x,
+                    delta_y,
+                    modifiers,
+                })
             }
         }
     }
 
-    fn translate_key_event(&mut self, key: rdev::Key, pressed: bool) -> Option<InputEvent> {
+    pub fn translate_key_event(&mut self, key: rdev::Key, pressed: bool) -> Option<InputEvent> {
         let code = normalize_key_code(key)?;
         let mut modifiers = self.modifiers;
 
@@ -219,6 +239,13 @@ mod tests {
             time: std::time::SystemTime::now(),
             name: None,
         });
-        assert_eq!(second, Some(InputEvent::MouseMove { dx: 4, dy: -3 }));
+        assert_eq!(
+            second,
+            Some(InputEvent::MouseMove {
+                dx: 4,
+                dy: -3,
+                modifiers: crate::event::Modifiers::none()
+            })
+        );
     }
 }
