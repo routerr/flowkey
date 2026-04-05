@@ -137,8 +137,9 @@ impl CaptureState {
                 button: normalize_button(button),
             }),
             rdev::EventType::MouseMove { x, y } => {
-                let delta = normalize_mouse_move_delta(self.last_mouse_position, x, y)?;
+                let last_position = self.last_mouse_position;
                 self.last_mouse_position = Some((x, y));
+                let delta = normalize_mouse_move_delta(last_position, x, y)?;
                 Some(InputEvent::MouseMove {
                     dx: delta.0,
                     dy: delta.1,
