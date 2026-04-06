@@ -11,6 +11,8 @@ use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
+mod setup;
+
 #[derive(Debug, Parser)]
 #[command(name = "flky", version, about = "LAN keyboard/mouse sharing daemon")]
 struct Cli {
@@ -22,6 +24,8 @@ struct Cli {
 enum Command {
     /// Run the daemon in the foreground
     Daemon,
+    /// Setup and pair devices interactively
+    Setup,
     /// Pairing commands
     Pair {
         #[command(subcommand)]
@@ -67,6 +71,9 @@ async fn main() -> Result<()> {
         Command::Daemon => {
             let config = Config::load_or_create()?;
             run_daemon(config).await?;
+        }
+        Command::Setup => {
+            setup::run_interactive_setup().await?;
         }
         Command::Pair { command } => match command {
             PairCommand::Init { advertised_addr } => {
