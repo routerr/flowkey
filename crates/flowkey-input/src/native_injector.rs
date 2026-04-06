@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+#[cfg(target_os = "macos")]
+use std::time::{Duration, Instant};
 
 #[cfg(not(target_os = "macos"))]
 use enigo::Coordinate;
@@ -37,6 +39,10 @@ pub struct NativeInputSink {
     loopback: Option<SharedLoopbackSuppressor>,
     #[cfg(target_os = "macos")]
     cursor_position: Option<(f64, f64)>,
+    #[cfg(target_os = "macos")]
+    dock_revealed_by_flowkey: bool,
+    #[cfg(target_os = "macos")]
+    last_dock_toggle_at: Option<Instant>,
 }
 
 impl NativeInputSink {
@@ -59,6 +65,10 @@ impl NativeInputSink {
             loopback,
             #[cfg(target_os = "macos")]
             cursor_position: None,
+            #[cfg(target_os = "macos")]
+            dock_revealed_by_flowkey: false,
+            #[cfg(target_os = "macos")]
+            last_dock_toggle_at: None,
         })
     }
 
@@ -277,7 +287,127 @@ impl NativeInputSink {
             );
         }
 
+        if let Some(bounds) = bounds {
+            self.update_macos_dock_proxy(target, bounds)?;
+        }
+
         self.cursor_position = Some(target);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn update_macos_dock_proxy(
+        &mut self,
+        target: (f64, f64),
+        bounds: CoordinateBounds,
+    ) -> Result<(), String> {
+        if !self.pressed_buttons.is_empty() {
+            return Ok(());
+        }
+
+        let screen_height = bounds.max_y - bounds.min_y;
+        if screen_height <= 0.0 {
+            return Ok(());
+        }
+
+        let distance_from_bottom = target.1 - bounds.min_y;
+        let reveal_threshold = 1.0;
+        let hide_threshold = (screen_height * 0.10).max(24.0);
+
+        if !self.dock_revealed_by_flowkey && distance_from_bottom <= reveal_threshold {
+            self.toggle_macos_dock_visibility()?;
+            self.dock_revealed_by_flowkey = true;
+            debug!(
+                platform = self.platform,
+                cursor_y = target.1,
+                distance_from_bottom,
+                hide_threshold,
+                "revealed macOS Dock via proxy hotkey at bottom edge"
+            );
+        } else if self.dock_revealed_by_flowkey && distance_from_bottom > hide_threshold {
+            self.toggle_macos_dock_visibility()?;
+            self.dock_revealed_by_flowkey = false;
+            debug!(
+                platform = self.platform,
+                cursor_y = target.1,
+                distance_from_bottom,
+                hide_threshold,
+                "hid macOS Dock via proxy hotkey after upward movement"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn toggle_macos_dock_visibility(&mut self) -> Result<(), String> {
+        let now = Instant::now();
+        if let Some(last_toggle_at) = self.last_dock_toggle_at {
+            if now.duration_since(last_toggle_at) < Duration::from_millis(350) {
+                return Ok(());
+            }
+        }
+
+        self.record_loopback(&InputEvent::KeyDown {
+            code: "MetaLeft".to_string(),
+            modifiers: Modifiers {
+                meta: true,
+                ..self.current_modifiers
+            },
+        });
+        self.record_loopback(&InputEvent::KeyDown {
+            code: "AltLeft".to_string(),
+            modifiers: Modifiers {
+                alt: true,
+                meta: true,
+                ..self.current_modifiers
+            },
+        });
+        self.record_loopback(&InputEvent::KeyDown {
+            code: "KeyD".to_string(),
+            modifiers: Modifiers {
+                alt: true,
+                meta: true,
+                ..self.current_modifiers
+            },
+        });
+        self.record_loopback(&InputEvent::KeyUp {
+            code: "KeyD".to_string(),
+            modifiers: Modifiers {
+                alt: true,
+                meta: true,
+                ..self.current_modifiers
+            },
+        });
+        self.record_loopback(&InputEvent::KeyUp {
+            code: "AltLeft".to_string(),
+            modifiers: Modifiers {
+                meta: true,
+                ..self.current_modifiers
+            },
+        });
+        self.record_loopback(&InputEvent::KeyUp {
+            code: "MetaLeft".to_string(),
+            modifiers: self.current_modifiers,
+        });
+
+        self.enigo
+            .key(Key::Meta, Direction::Press)
+            .map_err(|error| error.to_string())?;
+        self.enigo
+            .key(Key::Alt, Direction::Press)
+            .map_err(|error| error.to_string())?;
+        self.enigo
+            .key(Key::Unicode('d'), Direction::Click)
+            .map_err(|error| error.to_string())?;
+        self.enigo
+            .key(Key::Alt, Direction::Release)
+            .map_err(|error| error.to_string())?;
+        self.enigo
+            .key(Key::Meta, Direction::Release)
+            .map_err(|error| error.to_string())?;
+
+        self.last_dock_toggle_at = Some(now);
         Ok(())
     }
 
@@ -394,6 +524,7 @@ impl NativeInputSink {
         #[cfg(target_os = "macos")]
         {
             self.cursor_position = None;
+            self.dock_revealed_by_flowkey = false;
         }
         Ok(())
     }
