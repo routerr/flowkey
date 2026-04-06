@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 #[cfg(not(target_os = "macos"))]
 use enigo::Coordinate;
+use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use tracing::warn;
 
 #[cfg(target_os = "macos")]
@@ -12,12 +12,21 @@ use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButt
 #[cfg(target_os = "macos")]
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 #[cfg(target_os = "macos")]
-use core_graphics::geometry::CGPoint;
+use core_graphics::geometry::{CGPoint, CGRect};
 
 use crate::event::{InputEvent, Modifiers, MouseButton};
 use crate::inject::InputInjector;
 use crate::keycode::{modifier_from_mask, parse_key_code, KeyCode, ModifierKind, NamedKey};
 use crate::loopback::SharedLoopbackSuppressor;
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CoordinateBounds {
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+}
 
 pub struct NativeInputSink {
     platform: &'static str,
@@ -180,22 +189,48 @@ impl NativeInputSink {
                 // true screen position including after programmatic warps).
                 // CGEvent::new(HIDSystemState) can return (0, 0) when no
                 // recent hardware input exists.
-                let (x, y) = self
-                    .enigo
-                    .location()
-                    .map_err(|error| error.to_string())?;
+                let (x, y) = self.enigo.location().map_err(|error| error.to_string())?;
                 (f64::from(x), f64::from(y))
             }
         };
-        let target = (current.0 + f64::from(dx), current.1 + f64::from(dy));
+        let raw_target = (current.0 + f64::from(dx), current.1 + f64::from(dy));
+        let bounds = macos_visible_desktop_bounds();
+        let target = bounds
+            .map(|bounds| clamp_point(raw_target, bounds))
+            .unwrap_or(raw_target);
+        let applied_dx = round_delta(target.0 - current.0);
+        let applied_dy = round_delta(target.1 - current.1);
         let dest = CGPoint::new(target.0, target.1);
 
         // Always warp the cursor first — this is reliable, invisible to the
         // event system (no CGEvent generated), and keeps the OS cursor in sync.
-        CGDisplay::warp_mouse_cursor_position(dest)
-            .map_err(|error| format!("{error:?}"))?;
+        CGDisplay::warp_mouse_cursor_position(dest).map_err(|error| format!("{error:?}"))?;
 
-        if !self.pressed_buttons.is_empty() {
+        if self.pressed_buttons.is_empty() {
+            // Follow the warp with a real mouse-moved event so macOS features
+            // that key off pointer motion, such as Dock edge reveal, can
+            // observe the movement. A warp alone updates position but does
+            // not always behave like a hardware mouse-move from AppKit's
+            // perspective.
+            let source = CGEventSource::new(CGEventSourceStateID::Private)
+                .map_err(|_| "failed to create macOS event source for move".to_string())?;
+            let move_event = CGEvent::new_mouse_event(
+                source,
+                CGEventType::MouseMoved,
+                dest,
+                CGMouseButton::Left,
+            )
+            .map_err(|_| "failed to create macOS mouse-move event".to_string())?;
+            move_event.set_integer_value_field(
+                core_graphics::event::EventField::MOUSE_EVENT_DELTA_X,
+                i64::from(applied_dx),
+            );
+            move_event.set_integer_value_field(
+                core_graphics::event::EventField::MOUSE_EVENT_DELTA_Y,
+                i64::from(applied_dy),
+            );
+            move_event.post(CGEventTapLocation::HID);
+        } else {
             // A button is held: additionally post a drag event so macOS
             // recognises the gesture as a drag-and-drop operation. The warp
             // above already moved the cursor; this CGEvent tells AppKit and
@@ -214,11 +249,11 @@ impl NativeInputSink {
             // Set the relative delta fields so the system sees real movement.
             event.set_integer_value_field(
                 core_graphics::event::EventField::MOUSE_EVENT_DELTA_X,
-                i64::from(dx),
+                i64::from(applied_dx),
             );
             event.set_integer_value_field(
                 core_graphics::event::EventField::MOUSE_EVENT_DELTA_Y,
-                i64::from(dy),
+                i64::from(applied_dy),
             );
             event.post(CGEventTapLocation::HID);
         }
@@ -342,6 +377,61 @@ impl NativeInputSink {
             self.cursor_position = None;
         }
         Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_visible_desktop_bounds() -> Option<CoordinateBounds> {
+    let displays = CGDisplay::active_displays().ok()?;
+    let mut iter = displays.into_iter();
+    let first = iter.next()?;
+    let mut bounds = CoordinateBounds::from_rect(CGDisplay::new(first).bounds());
+
+    for display_id in iter {
+        bounds = bounds.union(CoordinateBounds::from_rect(CGDisplay::new(display_id).bounds()));
+    }
+
+    Some(bounds)
+}
+
+#[cfg(target_os = "macos")]
+fn clamp_point(point: (f64, f64), bounds: CoordinateBounds) -> (f64, f64) {
+    (
+        point.0.clamp(bounds.min_x, bounds.max_x),
+        point.1.clamp(bounds.min_y, bounds.max_y),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn round_delta(value: f64) -> i32 {
+    let rounded = value.round();
+    if rounded > i32::MAX as f64 {
+        i32::MAX
+    } else if rounded < i32::MIN as f64 {
+        i32::MIN
+    } else {
+        rounded as i32
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl CoordinateBounds {
+    fn from_rect(rect: CGRect) -> Self {
+        Self {
+            min_x: rect.origin.x,
+            max_x: rect.origin.x + rect.size.width,
+            min_y: rect.origin.y,
+            max_y: rect.origin.y + rect.size.height,
+        }
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            min_x: self.min_x.min(other.min_x),
+            max_x: self.max_x.max(other.max_x),
+            min_y: self.min_y.min(other.min_y),
+            max_y: self.max_y.max(other.max_y),
+        }
     }
 }
 
