@@ -190,14 +190,16 @@ impl NativeInputSink {
         let target = (current.0 + f64::from(dx), current.1 + f64::from(dy));
         let dest = CGPoint::new(target.0, target.1);
 
-        if self.pressed_buttons.is_empty() {
-            // No buttons held: warp the cursor directly.
-            CGDisplay::warp_mouse_cursor_position(dest)
-                .map_err(|error| format!("{error:?}"))?;
-        } else {
-            // A button is held: post a drag event so macOS recognises the
-            // gesture as a drag-and-drop operation. A plain warp does not
-            // generate the CGEvent that AppKit and other frameworks need.
+        // Always warp the cursor first — this is reliable, invisible to the
+        // event system (no CGEvent generated), and keeps the OS cursor in sync.
+        CGDisplay::warp_mouse_cursor_position(dest)
+            .map_err(|error| format!("{error:?}"))?;
+
+        if !self.pressed_buttons.is_empty() {
+            // A button is held: additionally post a drag event so macOS
+            // recognises the gesture as a drag-and-drop operation. The warp
+            // above already moved the cursor; this CGEvent tells AppKit and
+            // other frameworks that a drag is in progress.
             let (event_type, cg_button) = if self.pressed_buttons.contains(&Button::Left) {
                 (CGEventType::LeftMouseDragged, CGMouseButton::Left)
             } else if self.pressed_buttons.contains(&Button::Right) {
@@ -209,6 +211,15 @@ impl NativeInputSink {
                 .map_err(|_| "failed to create macOS event source for drag".to_string())?;
             let event = CGEvent::new_mouse_event(source, event_type, dest, cg_button)
                 .map_err(|_| "failed to create macOS drag event".to_string())?;
+            // Set the relative delta fields so the system sees real movement.
+            event.set_integer_value_field(
+                core_graphics::event::EventField::MOUSE_EVENT_DELTA_X,
+                i64::from(dx),
+            );
+            event.set_integer_value_field(
+                core_graphics::event::EventField::MOUSE_EVENT_DELTA_Y,
+                i64::from(dy),
+            );
             event.post(CGEventTapLocation::HID);
         }
 
