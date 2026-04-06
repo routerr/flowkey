@@ -4,9 +4,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use flowkey_input::capture::{CaptureSignal, CaptureState, InputCapture, LocalInputCapture};
+use flowkey_input::event::InputEvent;
 use flowkey_input::hotkey::{HotkeyBinding, HotkeyTracker};
 use flowkey_input::loopback::SharedLoopbackSuppressor;
 use tracing::warn;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN,
+};
 
 pub struct WindowsCapture {
     inner: LocalInputCapture,
@@ -89,10 +94,19 @@ impl InputCapture for WindowsExclusiveCapture {
         thread::spawn(move || {
             let tracker = Arc::new(Mutex::new(HotkeyTracker::new(binding)));
             let state = Arc::new(Mutex::new(CaptureState::default()));
+            let pending_recenter = Arc::new(Mutex::new(None::<(f64, f64)>));
 
             let grab_tracker = Arc::clone(&tracker);
             let grab_state = Arc::clone(&state);
+            let grab_pending_recenter = Arc::clone(&pending_recenter);
             let result = rdev::grab(move |event: rdev::Event| {
+                if consume_pending_recenter_event(
+                    &event,
+                    &mut grab_pending_recenter.lock().unwrap(),
+                ) {
+                    return None;
+                }
+
                 let mut tracker = grab_tracker.lock().unwrap();
                 let mut state = grab_state.lock().unwrap();
 
@@ -109,14 +123,22 @@ impl InputCapture for WindowsExclusiveCapture {
                             // to the local OS to prevent modifier keys from getting stuck when releasing control.
                             Some(event)
                         }
-                        CaptureSignal::Input(_) => {
-                            let _ = sender.send(signal);
+                        CaptureSignal::Input(input) => {
+                            let _ = sender.send(CaptureSignal::Input(input.clone()));
                             if suppression_enabled.load(Ordering::SeqCst) {
-                                // Restore the mouse position to its pre-translate value.
-                                // When an event is suppressed the OS cursor stays in place,
-                                // so the next delta must be relative to the actual cursor
-                                // position, not the position that was never applied.
-                                state.last_mouse_position = saved_mouse_position;
+                                if matches!(input, InputEvent::MouseMove { .. }) {
+                                    if let Some(center) = recenter_cursor_to_virtual_center() {
+                                        state.last_mouse_position = Some(center);
+                                        *grab_pending_recenter.lock().unwrap() = Some(center);
+                                    } else {
+                                        // Fall back to the old behavior if we fail to recenter.
+                                        state.last_mouse_position = saved_mouse_position;
+                                    }
+                                } else {
+                                    // The OS cursor stays in place for suppressed non-mouse-move
+                                    // events, so preserve the pre-event coordinate baseline.
+                                    state.last_mouse_position = saved_mouse_position;
+                                }
                                 None
                             } else {
                                 Some(event)
@@ -153,5 +175,76 @@ impl InputCapture for WindowsExclusiveCapture {
 
     fn set_suppression_enabled(&mut self, enabled: bool) {
         self.suppression_enabled.store(enabled, Ordering::SeqCst);
+    }
+}
+
+fn consume_pending_recenter_event(
+    event: &rdev::Event,
+    pending_recenter: &mut Option<(f64, f64)>,
+) -> bool {
+    let Some(target) = pending_recenter.as_ref().copied() else {
+        return false;
+    };
+
+    let rdev::EventType::MouseMove { x, y } = event.event_type else {
+        return false;
+    };
+
+    if (x - target.0).abs() <= 1.0 && (y - target.1).abs() <= 1.0 {
+        *pending_recenter = None;
+        true
+    } else {
+        false
+    }
+}
+
+fn recenter_cursor_to_virtual_center() -> Option<(f64, f64)> {
+    let origin_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let origin_y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+
+    let center_x = origin_x + (width / 2);
+    let center_y = origin_y + (height / 2);
+    let success = unsafe { SetCursorPos(center_x, center_y) };
+    if success == 0 {
+        None
+    } else {
+        Some((f64::from(center_x), f64::from(center_y)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::consume_pending_recenter_event;
+
+    #[test]
+    fn consumes_matching_recentering_move_once() {
+        let mut pending = Some((500.0, 400.0));
+        let event = rdev::Event {
+            event_type: rdev::EventType::MouseMove { x: 500.0, y: 400.0 },
+            time: std::time::SystemTime::now(),
+            name: None,
+        };
+
+        assert!(consume_pending_recenter_event(&event, &mut pending));
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn ignores_unrelated_mouse_move() {
+        let mut pending = Some((500.0, 400.0));
+        let event = rdev::Event {
+            event_type: rdev::EventType::MouseMove { x: 540.0, y: 400.0 },
+            time: std::time::SystemTime::now(),
+            name: None,
+        };
+
+        assert!(!consume_pending_recenter_event(&event, &mut pending));
+        assert_eq!(pending, Some((500.0, 400.0)));
     }
 }

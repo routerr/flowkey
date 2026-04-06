@@ -8,3 +8,4 @@ license.workspace = true
 flowkey-input = { path = "../flowkey-input" }
 rdev = { version = "0.5.3", features = ["unstable_grab"] }
 tracing.workspace = true
+windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging"] }

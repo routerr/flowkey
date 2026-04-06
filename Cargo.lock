@@ -637,6 +637,7 @@ dependencies = [
  "flowkey-input",
  "rdev",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
