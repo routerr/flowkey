@@ -8,6 +8,10 @@ use tracing::warn;
 #[cfg(target_os = "macos")]
 use core_graphics::display::CGDisplay;
 #[cfg(target_os = "macos")]
+use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton};
+#[cfg(target_os = "macos")]
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+#[cfg(target_os = "macos")]
 use core_graphics::geometry::CGPoint;
 
 use crate::event::{InputEvent, Modifiers, MouseButton};
@@ -184,8 +188,30 @@ impl NativeInputSink {
             }
         };
         let target = (current.0 + f64::from(dx), current.1 + f64::from(dy));
-        CGDisplay::warp_mouse_cursor_position(CGPoint::new(target.0, target.1))
-            .map_err(|error| format!("{error:?}"))?;
+        let dest = CGPoint::new(target.0, target.1);
+
+        if self.pressed_buttons.is_empty() {
+            // No buttons held: warp the cursor directly.
+            CGDisplay::warp_mouse_cursor_position(dest)
+                .map_err(|error| format!("{error:?}"))?;
+        } else {
+            // A button is held: post a drag event so macOS recognises the
+            // gesture as a drag-and-drop operation. A plain warp does not
+            // generate the CGEvent that AppKit and other frameworks need.
+            let (event_type, cg_button) = if self.pressed_buttons.contains(&Button::Left) {
+                (CGEventType::LeftMouseDragged, CGMouseButton::Left)
+            } else if self.pressed_buttons.contains(&Button::Right) {
+                (CGEventType::RightMouseDragged, CGMouseButton::Right)
+            } else {
+                (CGEventType::OtherMouseDragged, CGMouseButton::Center)
+            };
+            let source = CGEventSource::new(CGEventSourceStateID::Private)
+                .map_err(|_| "failed to create macOS event source for drag".to_string())?;
+            let event = CGEvent::new_mouse_event(source, event_type, dest, cg_button)
+                .map_err(|_| "failed to create macOS drag event".to_string())?;
+            event.post(CGEventTapLocation::HID);
+        }
+
         self.cursor_position = Some(target);
         Ok(())
     }
