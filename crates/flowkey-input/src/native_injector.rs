@@ -47,6 +47,8 @@ pub struct NativeInputSink {
     last_dock_action_at: Option<Instant>,
     #[cfg(target_os = "macos")]
     dock_hide_allowed_at: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    dock_visible: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -83,6 +85,8 @@ impl NativeInputSink {
             last_dock_action_at: None,
             #[cfg(target_os = "macos")]
             dock_hide_allowed_at: None,
+            #[cfg(target_os = "macos")]
+            dock_visible: false,
         })
     }
 
@@ -324,7 +328,7 @@ impl NativeInputSink {
             return Ok(());
         }
 
-        let distance_from_bottom = target.1 - bounds.min_y;
+        let distance_from_bottom = bounds.max_y - target.1;
         let reveal_threshold = 1.0;
         let hide_threshold = (screen_height * 0.10).max(24.0);
         let zone = dock_cursor_zone(distance_from_bottom, reveal_threshold, hide_threshold);
@@ -333,8 +337,9 @@ impl NativeInputSink {
 
         match action {
             Some(DockProxyAction::Show) => {
-                if self.trigger_macos_dock_show()? {
-                    self.dock_hide_allowed_at = Some(Instant::now() + Duration::from_millis(900));
+                if !self.dock_visible && self.trigger_macos_dock_show()? {
+                    self.dock_visible = true;
+                    self.dock_hide_allowed_at = Some(Instant::now() + Duration::from_millis(450));
                     debug!(
                         platform = self.platform,
                         cursor_y = target.1,
@@ -346,7 +351,8 @@ impl NativeInputSink {
                 }
             }
             Some(DockProxyAction::Hide) => {
-                if self.dock_hide_is_allowed() && self.trigger_macos_dock_hide()? {
+                if self.dock_visible && self.dock_hide_is_allowed() && self.trigger_macos_dock_hide()? {
+                    self.dock_visible = false;
                     debug!(
                         platform = self.platform,
                         cursor_y = target.1,
@@ -532,6 +538,7 @@ impl NativeInputSink {
             self.cursor_position = None;
             self.last_dock_zone = DockCursorZone::Interior;
             self.dock_hide_allowed_at = None;
+            self.dock_visible = false;
         }
         Ok(())
     }
@@ -619,6 +626,7 @@ fn dock_proxy_transition(
     current: DockCursorZone,
 ) -> Option<DockProxyAction> {
     match (previous, current) {
+        (DockCursorZone::Edge, DockCursorZone::Edge) => None,
         (_, DockCursorZone::Edge) => Some(DockProxyAction::Show),
         (DockCursorZone::Interior, DockCursorZone::BottomBand) => None,
         (DockCursorZone::BottomBand, DockCursorZone::Interior) => Some(DockProxyAction::Hide),
@@ -808,6 +816,14 @@ mod tests {
         );
         assert_eq!(
             dock_proxy_transition(DockCursorZone::Interior, DockCursorZone::BottomBand),
+            None
+        );
+    }
+
+    #[test]
+    fn dock_proxy_does_not_re_trigger_while_staying_at_edge() {
+        assert_eq!(
+            dock_proxy_transition(DockCursorZone::Edge, DockCursorZone::Edge),
             None
         );
     }
