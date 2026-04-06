@@ -45,6 +45,8 @@ pub struct NativeInputSink {
     last_dock_zone: DockCursorZone,
     #[cfg(target_os = "macos")]
     last_dock_action_at: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    dock_hide_allowed_at: Option<Instant>,
 }
 
 #[cfg(target_os = "macos")]
@@ -79,6 +81,8 @@ impl NativeInputSink {
             last_dock_zone: DockCursorZone::Interior,
             #[cfg(target_os = "macos")]
             last_dock_action_at: None,
+            #[cfg(target_os = "macos")]
+            dock_hide_allowed_at: None,
         })
     }
 
@@ -330,6 +334,7 @@ impl NativeInputSink {
         match action {
             Some(DockProxyAction::Show) => {
                 if self.trigger_macos_dock_show()? {
+                    self.dock_hide_allowed_at = Some(Instant::now() + Duration::from_millis(900));
                     debug!(
                         platform = self.platform,
                         cursor_y = target.1,
@@ -341,7 +346,7 @@ impl NativeInputSink {
                 }
             }
             Some(DockProxyAction::Hide) => {
-                if self.trigger_macos_dock_hide()? {
+                if self.dock_hide_is_allowed() && self.trigger_macos_dock_hide()? {
                     debug!(
                         platform = self.platform,
                         cursor_y = target.1,
@@ -368,8 +373,12 @@ impl NativeInputSink {
         }
 
         post_modified_macos_key_chord(
-            CONTROL_KEYCODE,
-            F3_KEYCODE,
+            LEFT_COMMAND_KEYCODE,
+            D_KEYCODE,
+            LEFT_OPTION_KEYCODE,
+            "MetaLeft",
+            "KeyD",
+            "AltLeft",
             &self.current_modifiers,
             &self.loopback,
         )?;
@@ -386,14 +395,26 @@ impl NativeInputSink {
             }
         }
 
-        post_simple_macos_key(
-            ESCAPE_KEYCODE,
-            "Escape",
+        post_modified_macos_key_chord(
+            LEFT_COMMAND_KEYCODE,
+            D_KEYCODE,
+            LEFT_OPTION_KEYCODE,
+            "MetaLeft",
+            "KeyD",
+            "AltLeft",
             &self.current_modifiers,
             &self.loopback,
         )?;
         self.last_dock_action_at = Some(now);
         Ok(true)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn dock_hide_is_allowed(&self) -> bool {
+        match self.dock_hide_allowed_at {
+            Some(deadline) => Instant::now() >= deadline,
+            None => true,
+        }
     }
 
     fn key_action(&mut self, key_code: KeyCode, direction: Direction) -> Result<(), String> {
@@ -510,6 +531,7 @@ impl NativeInputSink {
         {
             self.cursor_position = None;
             self.last_dock_zone = DockCursorZone::Interior;
+            self.dock_hide_allowed_at = None;
         }
         Ok(())
     }
@@ -561,13 +583,13 @@ fn macos_posted_delta(requested: i32, applied: i32) -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-const CONTROL_KEYCODE: CGKeyCode = 0x3B;
+const D_KEYCODE: CGKeyCode = 0x02;
 
 #[cfg(target_os = "macos")]
-const F3_KEYCODE: CGKeyCode = 0x63;
+const LEFT_COMMAND_KEYCODE: CGKeyCode = 0x37;
 
 #[cfg(target_os = "macos")]
-const ESCAPE_KEYCODE: CGKeyCode = 0x35;
+const LEFT_OPTION_KEYCODE: CGKeyCode = 0x3A;
 
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -616,60 +638,76 @@ fn post_macos_key_event(keycode: CGKeyCode, key_down: bool) -> Result<(), String
 }
 
 #[cfg(target_os = "macos")]
-fn post_simple_macos_key(
+fn post_modified_macos_key_chord(
+    first_keycode: CGKeyCode,
     keycode: CGKeyCode,
-    loopback_code: &str,
+    second_keycode: CGKeyCode,
+    first_code: &str,
+    key_code: &str,
+    second_code: &str,
     current_modifiers: &Modifiers,
     loopback: &Option<SharedLoopbackSuppressor>,
 ) -> Result<(), String> {
-    record_loopback_key_event(loopback, loopback_code, true, *current_modifiers);
-    record_loopback_key_event(loopback, loopback_code, false, *current_modifiers);
+    record_loopback_key_event(
+        loopback,
+        first_code,
+        true,
+        with_modifier_applied(*current_modifiers, first_code),
+    );
+    record_loopback_key_event(
+        loopback,
+        second_code,
+        true,
+        with_modifier_applied(
+            with_modifier_applied(*current_modifiers, first_code),
+            second_code,
+        ),
+    );
+    record_loopback_key_event(
+        loopback,
+        key_code,
+        true,
+        with_modifier_applied(
+            with_modifier_applied(*current_modifiers, first_code),
+            second_code,
+        ),
+    );
+    record_loopback_key_event(
+        loopback,
+        key_code,
+        false,
+        with_modifier_applied(
+            with_modifier_applied(*current_modifiers, first_code),
+            second_code,
+        ),
+    );
+    record_loopback_key_event(
+        loopback,
+        second_code,
+        false,
+        with_modifier_applied(*current_modifiers, first_code),
+    );
+    record_loopback_key_event(loopback, first_code, false, *current_modifiers);
+
+    post_macos_key_event(first_keycode, true)?;
+    post_macos_key_event(second_keycode, true)?;
     post_macos_key_event(keycode, true)?;
     post_macos_key_event(keycode, false)?;
+    post_macos_key_event(second_keycode, false)?;
+    post_macos_key_event(first_keycode, false)?;
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn post_modified_macos_key_chord(
-    modifier_keycode: CGKeyCode,
-    keycode: CGKeyCode,
-    current_modifiers: &Modifiers,
-    loopback: &Option<SharedLoopbackSuppressor>,
-) -> Result<(), String> {
-    record_loopback_key_event(
-        loopback,
-        "ControlLeft",
-        true,
-        Modifiers {
-            control: true,
-            ..*current_modifiers
-        },
-    );
-    record_loopback_key_event(
-        loopback,
-        "F3",
-        true,
-        Modifiers {
-            control: true,
-            ..*current_modifiers
-        },
-    );
-    record_loopback_key_event(
-        loopback,
-        "F3",
-        false,
-        Modifiers {
-            control: true,
-            ..*current_modifiers
-        },
-    );
-    record_loopback_key_event(loopback, "ControlLeft", false, *current_modifiers);
-
-    post_macos_key_event(modifier_keycode, true)?;
-    post_macos_key_event(keycode, true)?;
-    post_macos_key_event(keycode, false)?;
-    post_macos_key_event(modifier_keycode, false)?;
-    Ok(())
+fn with_modifier_applied(mut modifiers: Modifiers, key_code: &str) -> Modifiers {
+    match key_code {
+        "MetaLeft" | "MetaRight" => modifiers.meta = true,
+        "AltLeft" | "AltRight" => modifiers.alt = true,
+        "ControlLeft" | "ControlRight" => modifiers.control = true,
+        "ShiftLeft" | "ShiftRight" => modifiers.shift = true,
+        _ => {}
+    }
+    modifiers
 }
 
 #[cfg(target_os = "macos")]
