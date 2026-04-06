@@ -42,16 +42,17 @@ pub struct NativeInputSink {
     #[cfg(target_os = "macos")]
     cursor_position: Option<(f64, f64)>,
     #[cfg(target_os = "macos")]
-    dock_proxy_state: DockProxyState,
+    last_dock_zone: DockCursorZone,
     #[cfg(target_os = "macos")]
     last_dock_action_at: Option<Instant>,
 }
 
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DockProxyState {
-    Hidden,
-    Visible,
+enum DockCursorZone {
+    Edge,
+    BottomBand,
+    Interior,
 }
 
 impl NativeInputSink {
@@ -75,7 +76,7 @@ impl NativeInputSink {
             #[cfg(target_os = "macos")]
             cursor_position: None,
             #[cfg(target_os = "macos")]
-            dock_proxy_state: DockProxyState::Hidden,
+            last_dock_zone: DockCursorZone::Interior,
             #[cfg(target_os = "macos")]
             last_dock_action_at: None,
         })
@@ -322,33 +323,32 @@ impl NativeInputSink {
         let distance_from_bottom = target.1 - bounds.min_y;
         let reveal_threshold = 1.0;
         let hide_threshold = (screen_height * 0.10).max(24.0);
-        match dock_proxy_transition(
-            self.dock_proxy_state,
-            distance_from_bottom,
-            reveal_threshold,
-            hide_threshold,
-        ) {
+        let zone = dock_cursor_zone(distance_from_bottom, reveal_threshold, hide_threshold);
+        let action = dock_proxy_transition(self.last_dock_zone, zone);
+        self.last_dock_zone = zone;
+
+        match action {
             Some(DockProxyAction::Show) => {
                 if self.trigger_macos_dock_show()? {
-                    self.dock_proxy_state = DockProxyState::Visible;
                     debug!(
                         platform = self.platform,
                         cursor_y = target.1,
                         distance_from_bottom,
+                        zone = ?zone,
                         hide_threshold,
-                        "revealed macOS Dock via proxy state machine"
+                        "revealed macOS Dock via edge-entry proxy state machine"
                     );
                 }
             }
             Some(DockProxyAction::Hide) => {
                 if self.trigger_macos_dock_hide()? {
-                    self.dock_proxy_state = DockProxyState::Hidden;
                     debug!(
                         platform = self.platform,
                         cursor_y = target.1,
                         distance_from_bottom,
+                        zone = ?zone,
                         hide_threshold,
-                        "hid macOS Dock via proxy state machine"
+                        "hid macOS Dock via upward-exit proxy state machine"
                     );
                 }
             }
@@ -509,7 +509,7 @@ impl NativeInputSink {
         #[cfg(target_os = "macos")]
         {
             self.cursor_position = None;
-            self.dock_proxy_state = DockProxyState::Hidden;
+            self.last_dock_zone = DockCursorZone::Interior;
         }
         Ok(())
     }
@@ -577,19 +577,30 @@ enum DockProxyAction {
 }
 
 #[cfg(target_os = "macos")]
-fn dock_proxy_transition(
-    state: DockProxyState,
+fn dock_cursor_zone(
     distance_from_bottom: f64,
     reveal_threshold: f64,
     hide_threshold: f64,
+) -> DockCursorZone {
+    if distance_from_bottom <= reveal_threshold {
+        DockCursorZone::Edge
+    } else if distance_from_bottom <= hide_threshold {
+        DockCursorZone::BottomBand
+    } else {
+        DockCursorZone::Interior
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn dock_proxy_transition(
+    previous: DockCursorZone,
+    current: DockCursorZone,
 ) -> Option<DockProxyAction> {
-    match state {
-        DockProxyState::Hidden if distance_from_bottom <= reveal_threshold => {
-            Some(DockProxyAction::Show)
-        }
-        DockProxyState::Visible if distance_from_bottom > hide_threshold => {
-            Some(DockProxyAction::Hide)
-        }
+    match (previous, current) {
+        (_, DockCursorZone::Edge) => Some(DockProxyAction::Show),
+        (DockCursorZone::Interior, DockCursorZone::BottomBand) => None,
+        (DockCursorZone::BottomBand, DockCursorZone::Interior) => Some(DockProxyAction::Hide),
+        (DockCursorZone::Edge, DockCursorZone::Interior) => Some(DockProxyAction::Hide),
         _ => None,
     }
 }
@@ -733,7 +744,10 @@ impl crate::InputEventSink for NativeInputSink {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::{dock_proxy_transition, macos_posted_delta, DockProxyAction, DockProxyState};
+    use super::{
+        dock_cursor_zone, dock_proxy_transition, macos_posted_delta, DockCursorZone,
+        DockProxyAction,
+    };
 
     #[test]
     fn preserves_edge_pressure_when_cursor_is_clamped() {
@@ -749,12 +763,13 @@ mod tests {
 
     #[test]
     fn dock_proxy_only_shows_at_the_bottom_edge() {
+        assert_eq!(dock_cursor_zone(0.0, 1.0, 80.0), DockCursorZone::Edge);
         assert_eq!(
-            dock_proxy_transition(DockProxyState::Hidden, 0.0, 1.0, 80.0),
+            dock_proxy_transition(DockCursorZone::BottomBand, DockCursorZone::Edge),
             Some(DockProxyAction::Show)
         );
         assert_eq!(
-            dock_proxy_transition(DockProxyState::Hidden, 10.0, 1.0, 80.0),
+            dock_proxy_transition(DockCursorZone::Interior, DockCursorZone::BottomBand),
             None
         );
     }
@@ -762,11 +777,11 @@ mod tests {
     #[test]
     fn dock_proxy_only_hides_after_leaving_the_bottom_band() {
         assert_eq!(
-            dock_proxy_transition(DockProxyState::Visible, 20.0, 1.0, 80.0),
+            dock_proxy_transition(DockCursorZone::Edge, DockCursorZone::BottomBand),
             None
         );
         assert_eq!(
-            dock_proxy_transition(DockProxyState::Visible, 120.0, 1.0, 80.0),
+            dock_proxy_transition(DockCursorZone::BottomBand, DockCursorZone::Interior),
             Some(DockProxyAction::Hide)
         );
     }
