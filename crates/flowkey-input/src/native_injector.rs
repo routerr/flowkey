@@ -43,6 +43,8 @@ pub struct NativeInputSink {
     dock_revealed_by_flowkey: bool,
     #[cfg(target_os = "macos")]
     last_dock_toggle_at: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    dock_reveal_armed: bool,
 }
 
 impl NativeInputSink {
@@ -69,6 +71,8 @@ impl NativeInputSink {
             dock_revealed_by_flowkey: false,
             #[cfg(target_os = "macos")]
             last_dock_toggle_at: None,
+            #[cfg(target_os = "macos")]
+            dock_reveal_armed: true,
         })
     }
 
@@ -313,38 +317,52 @@ impl NativeInputSink {
         let distance_from_bottom = target.1 - bounds.min_y;
         let reveal_threshold = 1.0;
         let hide_threshold = (screen_height * 0.10).max(24.0);
+        let rearm_threshold = (screen_height * 0.04).max(12.0);
 
-        if !self.dock_revealed_by_flowkey && distance_from_bottom <= reveal_threshold {
-            self.toggle_macos_dock_visibility()?;
-            self.dock_revealed_by_flowkey = true;
-            debug!(
-                platform = self.platform,
-                cursor_y = target.1,
-                distance_from_bottom,
-                hide_threshold,
-                "revealed macOS Dock via proxy hotkey at bottom edge"
-            );
+        if !self.dock_revealed_by_flowkey && distance_from_bottom > rearm_threshold {
+            self.dock_reveal_armed = true;
+        }
+
+        if !self.dock_revealed_by_flowkey
+            && self.dock_reveal_armed
+            && distance_from_bottom <= reveal_threshold
+        {
+            if self.toggle_macos_dock_visibility()? {
+                self.dock_revealed_by_flowkey = true;
+                self.dock_reveal_armed = false;
+                debug!(
+                    platform = self.platform,
+                    cursor_y = target.1,
+                    distance_from_bottom,
+                    hide_threshold,
+                    rearm_threshold,
+                    "revealed macOS Dock via proxy hotkey at bottom edge"
+                );
+            }
         } else if self.dock_revealed_by_flowkey && distance_from_bottom > hide_threshold {
-            self.toggle_macos_dock_visibility()?;
-            self.dock_revealed_by_flowkey = false;
-            debug!(
-                platform = self.platform,
-                cursor_y = target.1,
-                distance_from_bottom,
-                hide_threshold,
-                "hid macOS Dock via proxy hotkey after upward movement"
-            );
+            if self.toggle_macos_dock_visibility()? {
+                self.dock_revealed_by_flowkey = false;
+                self.dock_reveal_armed = distance_from_bottom > rearm_threshold;
+                debug!(
+                    platform = self.platform,
+                    cursor_y = target.1,
+                    distance_from_bottom,
+                    hide_threshold,
+                    rearm_threshold,
+                    "hid macOS Dock via proxy hotkey after upward movement"
+                );
+            }
         }
 
         Ok(())
     }
 
     #[cfg(target_os = "macos")]
-    fn toggle_macos_dock_visibility(&mut self) -> Result<(), String> {
+    fn toggle_macos_dock_visibility(&mut self) -> Result<bool, String> {
         let now = Instant::now();
         if let Some(last_toggle_at) = self.last_dock_toggle_at {
             if now.duration_since(last_toggle_at) < Duration::from_millis(350) {
-                return Ok(());
+                return Ok(false);
             }
         }
 
@@ -408,7 +426,7 @@ impl NativeInputSink {
             .map_err(|error| error.to_string())?;
 
         self.last_dock_toggle_at = Some(now);
-        Ok(())
+        Ok(true)
     }
 
     fn key_action(&mut self, key_code: KeyCode, direction: Direction) -> Result<(), String> {
@@ -525,6 +543,7 @@ impl NativeInputSink {
         {
             self.cursor_position = None;
             self.dock_revealed_by_flowkey = false;
+            self.dock_reveal_armed = true;
         }
         Ok(())
     }
