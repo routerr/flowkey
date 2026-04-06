@@ -24,6 +24,7 @@ This document defines a minimal V1 CLI and a matching peer-to-peer daemon protoc
 
 ```text
 flky daemon
+flky setup
 flky pair init
 flky pair accept <token>
 flky discover
@@ -51,6 +52,23 @@ Starts the background daemon in the foreground terminal session.
 
 ```bash
 flky daemon
+```
+
+## `flky setup`
+
+An interactive CLI wizard that guides users through initial setup.
+
+### Behavior
+
+- prompts for local node name
+- allows setting a custom global switch hotkey
+- runs an mDNS discovery scan to find peers on the local network
+- prompts for pairing tokens to establish mutual trust immediately
+
+### Example
+
+```bash
+flky setup
 ```
 
 ## `flky pair init`

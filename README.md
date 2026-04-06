@@ -183,6 +183,7 @@ The CLI surface is still small, but the core commands are wired and `flky status
 
 ```text
 flky daemon
+flky setup
 flky pair init
 flky pair accept <token>
 flky discover
@@ -190,6 +191,7 @@ flky peers list
 flky switch <peer-id>
 flky release
 flky status
+flky doctor
 ```
 
 `flky switch` and `flky release` write a command file into the local config directory, and the daemon watches that file while it is running.
@@ -198,7 +200,15 @@ The daemon runtime now tracks authenticated peers, active peer selection, contro
 
 ## Pairing Flow
 
-Current pairing is a simple local trust flow:
+The easiest way to pair devices is using the interactive wizard:
+
+```bash
+flky setup
+```
+
+This will guide you through setting your device name, discovering peers on the network, and exchanging pairing tokens.
+
+Alternatively, you can use the manual CLI flow:
 
 1. On machine A:
 
