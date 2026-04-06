@@ -8,10 +8,6 @@ use tracing::warn;
 #[cfg(target_os = "macos")]
 use core_graphics::display::CGDisplay;
 #[cfg(target_os = "macos")]
-use core_graphics::event::CGEvent;
-#[cfg(target_os = "macos")]
-use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-#[cfg(target_os = "macos")]
 use core_graphics::geometry::CGPoint;
 
 use crate::event::{InputEvent, Modifiers, MouseButton};
@@ -175,16 +171,16 @@ impl NativeInputSink {
         let current = match self.cursor_position {
             Some(pos) => pos,
             None => {
-                // First move: read the actual cursor position from the system.
-                // CGEventSourceStateID::HIDSystemState is fine here because no
-                // programmatic warps have occurred yet (or cursor_position was
-                // reset after the last control session).
-                let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-                    .map_err(|_| "failed to create macOS event source".to_string())?;
-                let event = CGEvent::new(source)
-                    .map_err(|_| "failed to read macOS mouse location".to_string())?;
-                let loc = event.location();
-                (loc.x, loc.y)
+                // First move: read the actual cursor position via enigo which
+                // uses NSEvent::mouseLocation (reliable, always reflects the
+                // true screen position including after programmatic warps).
+                // CGEvent::new(HIDSystemState) can return (0, 0) when no
+                // recent hardware input exists.
+                let (x, y) = self
+                    .enigo
+                    .location()
+                    .map_err(|error| error.to_string())?;
+                (f64::from(x), f64::from(y))
             }
         };
         let target = (current.0 + f64::from(dx), current.1 + f64::from(dy));

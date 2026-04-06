@@ -90,8 +90,10 @@ impl InputCapture for MacosCapture {
                             }
                         }
                     } else {
-                        // event was suppressed by loopback
-                        None
+                        // Event was suppressed by loopback (it was injected by us).
+                        // Don't forward it over the network, but DO pass it through
+                        // to the OS so the injection actually takes effect.
+                        Some(event)
                     }
                 });
 
