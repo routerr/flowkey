@@ -198,8 +198,8 @@ impl NativeInputSink {
         let target = bounds
             .map(|bounds| clamp_point(raw_target, bounds))
             .unwrap_or(raw_target);
-        let applied_dx = round_delta(target.0 - current.0);
-        let applied_dy = round_delta(target.1 - current.1);
+        let posted_dx = macos_posted_delta(dx, round_delta(target.0 - current.0));
+        let posted_dy = macos_posted_delta(dy, round_delta(target.1 - current.1));
         let dest = CGPoint::new(target.0, target.1);
 
         // Always warp the cursor first — this is reliable, invisible to the
@@ -212,7 +212,7 @@ impl NativeInputSink {
             // observe the movement. A warp alone updates position but does
             // not always behave like a hardware mouse-move from AppKit's
             // perspective.
-            let source = CGEventSource::new(CGEventSourceStateID::Private)
+            let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
                 .map_err(|_| "failed to create macOS event source for move".to_string())?;
             let move_event = CGEvent::new_mouse_event(
                 source,
@@ -223,11 +223,11 @@ impl NativeInputSink {
             .map_err(|_| "failed to create macOS mouse-move event".to_string())?;
             move_event.set_integer_value_field(
                 core_graphics::event::EventField::MOUSE_EVENT_DELTA_X,
-                i64::from(applied_dx),
+                i64::from(posted_dx),
             );
             move_event.set_integer_value_field(
                 core_graphics::event::EventField::MOUSE_EVENT_DELTA_Y,
-                i64::from(applied_dy),
+                i64::from(posted_dy),
             );
             move_event.post(CGEventTapLocation::HID);
         } else {
@@ -242,18 +242,18 @@ impl NativeInputSink {
             } else {
                 (CGEventType::OtherMouseDragged, CGMouseButton::Center)
             };
-            let source = CGEventSource::new(CGEventSourceStateID::Private)
+            let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
                 .map_err(|_| "failed to create macOS event source for drag".to_string())?;
             let event = CGEvent::new_mouse_event(source, event_type, dest, cg_button)
                 .map_err(|_| "failed to create macOS drag event".to_string())?;
             // Set the relative delta fields so the system sees real movement.
             event.set_integer_value_field(
                 core_graphics::event::EventField::MOUSE_EVENT_DELTA_X,
-                i64::from(applied_dx),
+                i64::from(posted_dx),
             );
             event.set_integer_value_field(
                 core_graphics::event::EventField::MOUSE_EVENT_DELTA_Y,
-                i64::from(applied_dy),
+                i64::from(posted_dy),
             );
             event.post(CGEventTapLocation::HID);
         }
@@ -388,7 +388,9 @@ fn macos_visible_desktop_bounds() -> Option<CoordinateBounds> {
     let mut bounds = CoordinateBounds::from_rect(CGDisplay::new(first).bounds());
 
     for display_id in iter {
-        bounds = bounds.union(CoordinateBounds::from_rect(CGDisplay::new(display_id).bounds()));
+        bounds = bounds.union(CoordinateBounds::from_rect(
+            CGDisplay::new(display_id).bounds(),
+        ));
     }
 
     Some(bounds)
@@ -411,6 +413,15 @@ fn round_delta(value: f64) -> i32 {
         i32::MIN
     } else {
         rounded as i32
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_posted_delta(requested: i32, applied: i32) -> i32 {
+    if applied == 0 && requested != 0 {
+        requested
+    } else {
+        applied
     }
 }
 
@@ -452,6 +463,23 @@ impl crate::InputEventSink for NativeInputSink {
 
     fn release_all(&mut self) -> Result<(), String> {
         self.release_all_pressed()
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::macos_posted_delta;
+
+    #[test]
+    fn preserves_edge_pressure_when_cursor_is_clamped() {
+        assert_eq!(macos_posted_delta(12, 0), 12);
+        assert_eq!(macos_posted_delta(-7, 0), -7);
+    }
+
+    #[test]
+    fn uses_applied_delta_when_cursor_actually_moves() {
+        assert_eq!(macos_posted_delta(12, 9), 9);
+        assert_eq!(macos_posted_delta(-7, -5), -5);
     }
 }
 
