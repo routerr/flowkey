@@ -96,6 +96,7 @@ impl InputCapture for WindowsExclusiveCapture {
                 let mut tracker = grab_tracker.lock().unwrap();
                 let mut state = grab_state.lock().unwrap();
 
+                let saved_mouse_position = state.last_mouse_position;
                 let signal = state.translate(event.clone(), &mut tracker, loopback.as_ref());
                 if let Some(signal) = signal {
                     match signal {
@@ -111,6 +112,11 @@ impl InputCapture for WindowsExclusiveCapture {
                         CaptureSignal::Input(_) => {
                             let _ = sender.send(signal);
                             if suppression_enabled.load(Ordering::SeqCst) {
+                                // Restore the mouse position to its pre-translate value.
+                                // When an event is suppressed the OS cursor stays in place,
+                                // so the next delta must be relative to the actual cursor
+                                // position, not the position that was never applied.
+                                state.last_mouse_position = saved_mouse_position;
                                 None
                             } else {
                                 Some(event)
