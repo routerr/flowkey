@@ -45,11 +45,12 @@ Completed:
 - **macOS Exclusive Capture** via `CGEventTap`
 - **Automatic Control Resume** policy
 - **Reachability Probing (FRP)** for multi-interface machines
+- **Windows Exclusive Capture** via low-level hooks (`rdev::grab`)
+- **`flky setup`** interactive configuration for capture mode (Passive vs Exclusive)
 - **`flky doctor`** diagnostic command
 
 Partially implemented:
 
-- Windows exclusive capture
 - durable reconnect strategy (core is there, needs more chaos testing)
 - platform-specific operator guidance and interactive-session UX
 - short end-to-end regression coverage for the validated control path

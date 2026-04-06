@@ -66,18 +66,25 @@ impl InputCapture for MacosCapture {
 
                     let signal = state.translate(event.clone(), &mut tracker, loopback.as_ref());
                     if let Some(signal) = signal {
-                        let _ = sender.send(signal.clone());
-
-                        if suppression_enabled.load(Ordering::SeqCst) {
-                            match signal {
-                                CaptureSignal::HotkeyPressed => Some(event),
-                                CaptureSignal::Input(_) => None,
+                        match signal {
+                            CaptureSignal::HotkeyPressed => {
+                                let _ = sender.send(signal);
+                                Some(event)
                             }
-                        } else {
-                            Some(event)
+                            CaptureSignal::HotkeySuppressed => {
+                                Some(event)
+                            }
+                            CaptureSignal::Input(_) => {
+                                let _ = sender.send(signal);
+                                if suppression_enabled.load(Ordering::SeqCst) {
+                                    None
+                                } else {
+                                    Some(event)
+                                }
+                            }
                         }
                     } else {
-                        // event was suppressed by loopback or hotkey-tracker
+                        // event was suppressed by loopback
                         None
                     }
                 });
@@ -93,7 +100,9 @@ impl InputCapture for MacosCapture {
                     let mut state = listen_state.lock().unwrap();
 
                     if let Some(signal) = state.translate(event, &mut tracker, loopback.as_ref()) {
-                        let _ = sender.send(signal);
+                        if !matches!(signal, CaptureSignal::HotkeySuppressed) {
+                            let _ = sender.send(signal);
+                        }
                     }
                 });
 

@@ -70,14 +70,16 @@ The active role flips when the local user presses the configured hotkey. In the 
 
 Goal: support a mode where the controller machine stops reacting locally and only the remote peer receives the input stream.
 
-Current implementation:
+Implementation:
 - **macOS**: Fully implemented using `CGEventTap` (via `rdev::grab`). Local input is suppressed while in `Controlling` mode, while the configured hotkey remains functional for emergency release.
-- **Windows**: Currently uses a stub that falls back to passive mode. Planned implementation via `WH_KEYBOARD_LL` and `WH_MOUSE_LL` hooks.
+- **Windows**: Fully implemented using low-level keyboard and mouse hooks (`WH_KEYBOARD_LL` and `WH_MOUSE_LL` via `rdev::grab`). Input is intercepted and swallowed when suppression is enabled.
 
-Required architecture components:
+Architecture components:
 - `InputCapture` trait with `set_suppression_enabled(bool)`
 - Shared `suppression_state` (AtomicBool) managed by the daemon and shared with the capture backend.
 - Low-latency event-driven loop using `wait()` instead of polling.
+- `HotkeySuppressed` signal: Ensures modifier keys (Ctrl, Alt, Shift, Meta) are correctly released on the local machine when switching control, preventing "stuck" keys.
+- **Resilient Cleanup**: Automatic restoration of local input control upon network disconnection or session failure.
 
 ## Reachability Probing (FRP)
 

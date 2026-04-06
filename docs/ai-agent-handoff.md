@@ -15,6 +15,10 @@ This file is for the next AI agent that continues `flowkey`.
 - native macOS and Windows input injection backends
 - hotkey parsing, local capture scaffolding, and active-peer forwarding
 - hotkey activation-chord suppression
+- **Windows Exclusive Capture**: Implemented via low-level hooks (`rdev::grab`)
+- **Interactive Setup**: `flky setup` command for node name, hotkey, capture mode, and pairing
+- **Stuck Key Prevention**: `HotkeySuppressed` signal ensures modifier keys are released locally when switching control
+- **Resilient Cleanup**: Automatic restoration of local input control upon network disconnection
 
 ## What Is Still Missing
 
@@ -26,6 +30,10 @@ This file is for the next AI agent that continues `flowkey`.
 
 Recently completed:
 
+- **Windows Exclusive Capture**: Fixed the stub implementation to use real low-level suppression hooks via `rdev::grab`.
+- **Interactive Setup**: Added a step to `flky setup` to choose between `Passive` and `Exclusive` capture modes.
+- **Modifier Recovery**: Updated the capture loop to pass hotkey release events back to the local OS, preventing stuck Ctrl/Alt/Shift keys.
+- **Disconnection Safety**: Updated `cleanup_session` and `mark_lost_session` to force `suppression_state` to false, ensuring the user always regains local control if the network fails.
 - SwitchRequest/SwitchRelease send and receive are wired through the session channel and daemon callbacks
 - pairing now supports a persistent `node.advertised_addr` config override plus `flky pair init --advertised-addr <ip:port>` for one-off tokens
 - runtime notes are deduplicated so reconnects no longer spam identical diagnostics

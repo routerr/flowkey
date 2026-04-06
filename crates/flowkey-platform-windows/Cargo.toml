@@ -6,4 +6,5 @@ license.workspace = true
 
 [dependencies]
 flowkey-input = { path = "../flowkey-input" }
+rdev = { version = "0.5.3", features = ["unstable_grab"] }
 tracing.workspace = true

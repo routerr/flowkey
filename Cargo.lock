@@ -635,6 +635,7 @@ name = "flowkey-platform-windows"
 version = "0.1.0"
 dependencies = [
  "flowkey-input",
+ "rdev",
  "tracing",
 ]
 

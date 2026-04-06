@@ -12,6 +12,7 @@ use crate::normalize::{
 pub enum CaptureSignal {
     Input(InputEvent),
     HotkeyPressed,
+    HotkeySuppressed,
 }
 
 pub trait InputCapture: Send {
@@ -67,7 +68,9 @@ impl InputCapture for LocalInputCapture {
 
                 let result = rdev::listen(move |event| {
                     if let Some(signal) = state.translate(event, &mut tracker, loopback.as_ref()) {
-                        let _ = sender.send(signal);
+                        if !matches!(signal, CaptureSignal::HotkeySuppressed) {
+                            let _ = sender.send(signal);
+                        }
                     }
                 });
 
@@ -131,7 +134,7 @@ impl CaptureState {
 
         match tracker.process(&input) {
             HotkeyOutcome::Pressed => return Some(CaptureSignal::HotkeyPressed),
-            HotkeyOutcome::Suppressed => return None,
+            HotkeyOutcome::Suppressed => return Some(CaptureSignal::HotkeySuppressed),
             HotkeyOutcome::Forward => {}
         }
 

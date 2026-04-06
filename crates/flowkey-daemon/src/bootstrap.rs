@@ -199,6 +199,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                             &session_senders,
                             &runtime,
                             &status_path,
+                            &suppression_state,
                             sink.as_mut(),
                         );
                     }
@@ -324,6 +325,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                                 &session_senders,
                                 &runtime,
                                 &status_path,
+                                &suppression_state,
                                 sink.as_mut(),
                             );
                         }
@@ -500,6 +502,7 @@ fn spawn_hotkey_watcher(
                                         &session_senders,
                                         &runtime,
                                         &status_path,
+                                        &suppression_state,
                                     );
                                 } else {
                                     info!(peer = %peer_id, event = ?event, "forwarded local input to active peer");
@@ -512,11 +515,13 @@ fn spawn_hotkey_watcher(
                                     &session_senders,
                                     &runtime,
                                     &status_path,
+                                    &suppression_state,
                                 );
                             }
                         }
                     }
                 }
+                Some(CaptureSignal::HotkeySuppressed) => {}
                 None => {}
             }
         });
@@ -814,6 +819,7 @@ fn cleanup_session(
     session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
     runtime: &Arc<Mutex<DaemonRuntime>>,
     status_path: &std::path::Path,
+    suppression_state: &Arc<AtomicBool>,
     sink: &mut dyn InputEventSink,
 ) {
     let sender_count = {
@@ -832,6 +838,7 @@ fn cleanup_session(
         .lock()
         .expect("daemon runtime mutex should not be poisoned")
         .mark_disconnected(peer_id);
+    suppression_state.store(false, Ordering::SeqCst);
     persist_status_snapshot(runtime, status_path);
     info!(peer = %peer_id, sender_count, "cleaned up session sender after disconnect");
 }
@@ -841,6 +848,7 @@ fn mark_lost_session(
     session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
     runtime: &Arc<Mutex<DaemonRuntime>>,
     status_path: &std::path::Path,
+    suppression_state: &Arc<AtomicBool>,
 ) {
     let sender_count = {
         let mut senders = session_senders
@@ -854,6 +862,7 @@ fn mark_lost_session(
         .lock()
         .expect("daemon runtime mutex should not be poisoned")
         .mark_disconnected(peer_id);
+    suppression_state.store(false, Ordering::SeqCst);
     persist_status_snapshot(runtime, status_path);
     warn!(peer = %peer_id, sender_count, "marked session lost and removed sender registration");
 }
@@ -890,7 +899,7 @@ fn create_platform_input_capture(
         let note = match capture_mode {
             CaptureMode::Passive => None,
             CaptureMode::Exclusive => Some(
-                "exclusive capture mode requested on Windows; current build still uses passive capture until low-level suppression hooks are implemented"
+                "exclusive capture mode enabled on Windows; using low-level hooks for input suppression"
                     .to_string(),
             ),
         };
@@ -1147,6 +1156,7 @@ mod tests {
     fn cleanup_session_releases_input_and_persists_disconnected_status() {
         let runtime = Arc::new(Mutex::new(DaemonRuntime::new()));
         let session_senders = Arc::new(Mutex::new(HashMap::<String, SessionSender>::new()));
+        let suppression_state = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let (sender, _receiver) = session_channel();
         let peer_id = "office-pc";
         let status_path = temp_status_path("cleanup");
@@ -1164,7 +1174,14 @@ mod tests {
             .expect("session sender registry should not be poisoned")
             .insert(peer_id.to_string(), sender);
 
-        cleanup_session(peer_id, &session_senders, &runtime, &status_path, &mut sink);
+        cleanup_session(
+            peer_id,
+            &session_senders,
+            &runtime,
+            &status_path,
+            &suppression_state,
+            &mut sink,
+        );
 
         let runtime = runtime
             .lock()
@@ -1191,6 +1208,7 @@ mod tests {
     fn lost_session_enters_recovery_without_removing_other_sessions() {
         let runtime = Arc::new(Mutex::new(DaemonRuntime::new()));
         let session_senders = Arc::new(Mutex::new(HashMap::<String, SessionSender>::new()));
+        let suppression_state = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let (active_sender, _active_receiver) = session_channel();
         let (spare_sender, _spare_receiver) = session_channel();
         let peer_id = "office-pc";
@@ -1215,7 +1233,13 @@ mod tests {
             senders.insert(spare_peer_id.to_string(), spare_sender);
         }
 
-        mark_lost_session(peer_id, &session_senders, &runtime, &status_path);
+        mark_lost_session(
+            peer_id,
+            &session_senders,
+            &runtime,
+            &status_path,
+            &suppression_state,
+        );
 
         let runtime = runtime
             .lock()

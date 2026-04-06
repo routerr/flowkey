@@ -2,6 +2,20 @@
 
 This guide covers the platform-specific requirements for running `flowkey` on macOS and Windows.
 
+## Interactive Setup
+
+To get started quickly, run the interactive setup command on both devices:
+```bash
+flky setup
+```
+This will guide you through:
+1.  **Naming your device**: Choose a recognizable name for each machine.
+2.  **Configuring the hotkey**: Select or define a custom key combination to switch control.
+3.  **Choosing Capture Mode**: 
+    -   **Passive** (Recommended): Captures input events while passing them through to the local system.
+    -   **Exclusive**: Intercepts and suppresses input events locally when control is switched to a remote peer. This requires higher permissions but provides better isolation.
+4.  **Pairing**: Exchange pairing tokens between devices to establish mutual trust.
+
 ## macOS Setup
 
 macOS requires explicit user permission for observing and injecting input.
