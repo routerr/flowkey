@@ -18,7 +18,7 @@ pub async fn run_interactive_setup() -> Result<()> {
         .with_default(&config.node.name)
         .prompt()
         .context("failed to prompt for node name")?;
-    
+
     if new_name != config.node.name {
         config.node.name = new_name;
         config.save().context("failed to save config")?;
@@ -38,7 +38,7 @@ pub async fn run_interactive_setup() -> Result<()> {
 
     let current_hotkey = config.switch.hotkey.clone();
     println!("Current switch hotkey is: {}", current_hotkey);
-    
+
     let hotkey_choice = Select::new("Choose a hotkey to switch control:", common_hotkeys)
         .with_help_message("Press Enter to select, or start typing to filter")
         .prompt()
@@ -84,9 +84,15 @@ pub async fn run_interactive_setup() -> Result<()> {
     if new_capture_mode != current_capture_mode {
         config.switch.capture_mode = new_capture_mode;
         config.save().context("failed to save config")?;
-        println!("Capture mode updated to '{}'.\n", config.switch.capture_mode.as_str());
+        println!(
+            "Capture mode updated to '{}'.\n",
+            config.switch.capture_mode.as_str()
+        );
     } else {
-        println!("Capture mode kept as '{}'.\n", config.switch.capture_mode.as_str());
+        println!(
+            "Capture mode kept as '{}'.\n",
+            config.switch.capture_mode.as_str()
+        );
     }
 
     // 5. Discovery
@@ -106,7 +112,10 @@ pub async fn run_interactive_setup() -> Result<()> {
 
     if !discovered.is_empty() {
         println!("Found {} device(s).", discovered.len());
-        let mut options = discovered.iter().map(|p| format!("{} ({})", p.name, p.addrs.first().unwrap_or(&p.hostname))).collect::<Vec<_>>();
+        let mut options = discovered
+            .iter()
+            .map(|p| format!("{} ({})", p.name, p.addrs.first().unwrap_or(&p.hostname)))
+            .collect::<Vec<_>>();
         options.push("Skip / Enter token manually".to_string());
 
         let peer_choice = Select::new("Do you want to pair with a discovered device?", options)
@@ -115,7 +124,9 @@ pub async fn run_interactive_setup() -> Result<()> {
 
         if peer_choice != "Skip / Enter token manually" {
             // Find the selected peer
-            if let Some(index) = discovered.iter().position(|p| format!("{} ({})", p.name, p.addrs.first().unwrap_or(&p.hostname)) == peer_choice) {
+            if let Some(index) = discovered.iter().position(|p| {
+                format!("{} ({})", p.name, p.addrs.first().unwrap_or(&p.hostname)) == peer_choice
+            }) {
                 selected_peer = Some(discovered[index].clone());
             }
         }
@@ -126,29 +137,34 @@ pub async fn run_interactive_setup() -> Result<()> {
     // 6. Pairing Token Exchange
     println!("\n--- Pairing ---");
     println!("To connect two devices, they must trust each other's pairing tokens.");
-    
+
     // Generate our token
     let identity = NodeIdentity {
         node_id: config.node.id.clone(),
         node_name: config.node.name.clone(),
-        listen_addr: config.advertised_listen_addr().unwrap_or(config.node.listen_addr.clone()),
+        listen_addr: config
+            .advertised_listen_addr()
+            .unwrap_or(config.node.listen_addr.clone()),
         public_key: config.node.public_key.clone(),
     };
-    
+
     let offer = HandshakeOffer::new(identity, &config.node.private_key)
         .context("failed to generate local pairing offer")?;
-    let token = offer.to_token().context("failed to serialize pairing offer")?;
-    
+    let token = offer
+        .to_token()
+        .context("failed to serialize pairing offer")?;
+
     println!("\nYOUR pairing token (paste this on the OTHER device):");
     println!("\n{}\n", token);
 
     if let Some(peer) = selected_peer {
         println!("You selected to pair with '{}'.", peer.name);
     }
-    
-    let remote_token = Text::new("Paste the pairing token from the OTHER device (or press Enter to finish):")
-        .prompt()
-        .context("failed to prompt for remote token")?;
+
+    let remote_token =
+        Text::new("Paste the pairing token from the OTHER device (or press Enter to finish):")
+            .prompt()
+            .context("failed to prompt for remote token")?;
 
     let trimmed_token = remote_token.trim();
     if !trimmed_token.is_empty() {
@@ -161,7 +177,9 @@ pub async fn run_interactive_setup() -> Result<()> {
                     public_key: offer.node.public_key.clone(),
                     trusted: true,
                 });
-                config.save().context("failed to save config with new peer")?;
+                config
+                    .save()
+                    .context("failed to save config with new peer")?;
                 println!("\nSuccessfully paired with '{}'!", offer.node.node_name);
             }
             Err(e) => {

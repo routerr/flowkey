@@ -1,8 +1,8 @@
-use std::net::SocketAddr;
-use std::time::Duration;
 use anyhow::{Context, Result};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, warn};
@@ -32,7 +32,7 @@ pub async fn run_reachability_race(
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await
         .context("failed to bind UDP socket for reachability probe")?;
-    
+
     // Broadcast enabled just in case, though we are sending to specific IPs
     socket.set_broadcast(true).ok();
 
@@ -45,7 +45,7 @@ pub async fn run_reachability_race(
         sender_id: "probe-client".to_string(), // Client ID isn't strictly necessary for the response match
         nonce: nonce.clone(),
     };
-    
+
     let payload = serde_json::to_vec(&request)?;
 
     for candidate in candidates {
@@ -60,7 +60,7 @@ pub async fn run_reachability_race(
     }
 
     let mut buf = [0u8; 1024];
-    
+
     let result = timeout(timeout_duration, async {
         loop {
             match socket.recv_from(&mut buf).await {
@@ -84,7 +84,9 @@ pub async fn run_reachability_race(
     match result {
         Ok(Ok(winner)) => Ok(winner),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(anyhow::anyhow!("reachability probe timed out before receiving a valid response")),
+        Err(_) => Err(anyhow::anyhow!(
+            "reachability probe timed out before receiving a valid response"
+        )),
     }
 }
 
@@ -103,12 +105,14 @@ pub async fn listen_for_probes(listen_addr: String, local_node_id: String) {
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, addr)) => {
-                if let Ok(ProbeMessage::ProbeRequest { nonce, .. }) = serde_json::from_slice(&buf[..len]) {
+                if let Ok(ProbeMessage::ProbeRequest { nonce, .. }) =
+                    serde_json::from_slice(&buf[..len])
+                {
                     let response = ProbeMessage::ProbeResponse {
                         responder_id: local_node_id.clone(),
                         nonce,
                     };
-                    
+
                     if let Ok(payload) = serde_json::to_vec(&response) {
                         if let Err(error) = socket.send_to(&payload, addr).await {
                             warn!(peer = %addr, %error, "failed to send probe response");

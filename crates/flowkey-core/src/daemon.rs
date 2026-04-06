@@ -185,7 +185,9 @@ impl DaemonRuntime {
     }
 
     pub fn enter_recovering(&mut self) {
-        self.state = DaemonState::Recovering { intended_role: None };
+        self.state = DaemonState::Recovering {
+            intended_role: None,
+        };
     }
 }
 
@@ -284,7 +286,12 @@ mod tests {
 
         runtime.mark_disconnected("office-pc");
 
-        assert_eq!(runtime.state, DaemonState::Recovering { intended_role: Some(Role::Controlling) });
+        assert_eq!(
+            runtime.state,
+            DaemonState::Recovering {
+                intended_role: Some(Role::Controlling)
+            }
+        );
         assert_eq!(runtime.active_peer_id.as_deref(), Some("office-pc"));
         assert!(!runtime.sessions.contains_key("office-pc"));
         assert!(runtime.sessions.contains_key("spare-pc"));
@@ -314,7 +321,12 @@ mod tests {
 
         runtime.mark_authenticated("backup-pc");
 
-        assert_eq!(runtime.state, DaemonState::Recovering { intended_role: Some(Role::Controlling) });
+        assert_eq!(
+            runtime.state,
+            DaemonState::Recovering {
+                intended_role: Some(Role::Controlling)
+            }
+        );
         assert_eq!(runtime.active_peer_id.as_deref(), Some("office-pc"));
         assert!(!runtime.sessions.contains_key("office-pc"));
         assert!(runtime.sessions.contains_key("spare-pc"));

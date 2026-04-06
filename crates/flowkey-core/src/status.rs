@@ -36,7 +36,9 @@ impl DaemonStatus {
             DaemonState::ControlledBy { peer_id } => {
                 ("controlled-by".to_string(), Some(peer_id.clone()))
             }
-            DaemonState::Recovering { .. } => ("recovering".to_string(), runtime.active_peer_id.clone()),
+            DaemonState::Recovering { .. } => {
+                ("recovering".to_string(), runtime.active_peer_id.clone())
+            }
         };
 
         let session_healthy = matches!(

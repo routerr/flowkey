@@ -34,7 +34,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
         .listen_addr
         .parse()
         .with_context(|| format!("invalid listen address {}", config.node.listen_addr))?;
-        
+
     let probe_addr = config.node.listen_addr.clone();
     let local_id = config.node.id.clone();
     tokio::spawn(async move {
@@ -152,7 +152,6 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                         }
 
                         let sender_count = {
-
                             let mut senders = session_senders
                                 .lock()
                                 .expect("session sender registry should not be poisoned");
@@ -348,7 +347,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
 
     info!("cleaning up system state before exit");
     suppression_state.store(false, Ordering::SeqCst);
-    
+
     // Create a temporary sink to flush any held keys/buttons
     let loopback = LoopbackSuppressor::shared(Duration::from_millis(0));
     let (mut sink, _, _) = create_platform_input_sink(loopback);
@@ -382,10 +381,21 @@ fn spawn_hotkey_watcher(
     suppression_state: Arc<AtomicBool>,
 ) {
     let (mut capture, capture_note): (Box<dyn InputCapture>, Option<String>) =
-        create_platform_input_capture(binding, loopback, capture_mode, Arc::clone(&suppression_state));
+        create_platform_input_capture(
+            binding,
+            loopback,
+            capture_mode,
+            Arc::clone(&suppression_state),
+        );
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let _ = (&runtime, &session_senders, &status_path, capture_mode, suppression_state);
+    let _ = (
+        &runtime,
+        &session_senders,
+        &status_path,
+        capture_mode,
+        suppression_state,
+    );
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
@@ -884,12 +894,14 @@ fn create_platform_input_capture(
         };
 
         return (
-            Box::new(flowkey_platform_macos::capture::MacosCapture::with_loopback(
-                binding,
-                Some(loopback),
-                matches!(capture_mode, CaptureMode::Exclusive),
-                suppression_state,
-            )),
+            Box::new(
+                flowkey_platform_macos::capture::MacosCapture::with_loopback(
+                    binding,
+                    Some(loopback),
+                    matches!(capture_mode, CaptureMode::Exclusive),
+                    suppression_state,
+                ),
+            ),
             note,
         );
     }
@@ -1251,7 +1263,12 @@ mod tests {
             .expect("status snapshot should persist after lost session");
         fs::remove_file(&status_path).ok();
 
-        assert_eq!(runtime.state, DaemonState::Recovering { intended_role: Some(Role::Controlling) });
+        assert_eq!(
+            runtime.state,
+            DaemonState::Recovering {
+                intended_role: Some(Role::Controlling)
+            }
+        );
         assert_eq!(runtime.active_peer_id.as_deref(), Some(peer_id));
         assert!(senders.get(spare_peer_id).is_some());
         assert!(senders.get(peer_id).is_none());

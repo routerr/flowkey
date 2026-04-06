@@ -288,19 +288,35 @@ async fn handle_doctor() -> Result<()> {
     println!("------------------------------------");
 
     // 1. OS Info
-    println!("System: {} {}", std::env::consts::OS, std::env::consts::ARCH);
+    println!(
+        "System: {} {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
 
     // 2. Permissions (macOS/Windows)
     #[cfg(target_os = "macos")]
     {
         let status = flowkey_platform_macos::permissions::PermissionStatus::probe();
-        render_doctor_check("macOS Accessibility", status.accessibility, "Enable in System Settings > Privacy & Security > Accessibility");
-        render_doctor_check("macOS Input Monitoring", status.input_monitoring, "Enable in System Settings > Privacy & Security > Input Monitoring");
+        render_doctor_check(
+            "macOS Accessibility",
+            status.accessibility,
+            "Enable in System Settings > Privacy & Security > Accessibility",
+        );
+        render_doctor_check(
+            "macOS Input Monitoring",
+            status.input_monitoring,
+            "Enable in System Settings > Privacy & Security > Input Monitoring",
+        );
     }
     #[cfg(target_os = "windows")]
     {
         let status = flowkey_platform_windows::permissions::PermissionStatus::probe();
-        render_doctor_check("Windows Interactive Session", status.user_session, "Run from a signed-in desktop session (not SSH/service)");
+        render_doctor_check(
+            "Windows Interactive Session",
+            status.user_session,
+            "Run from a signed-in desktop session (not SSH/service)",
+        );
     }
 
     // 3. Network Bind Check
@@ -310,17 +326,31 @@ async fn handle_doctor() -> Result<()> {
     render_doctor_check(
         &format!("Network Bind ({bind_addr})"),
         bind_result.is_ok(),
-        &format!("Port may be in use or blocked by firewall: {}", bind_result.err().map(|e| e.to_string()).unwrap_or_default())
+        &format!(
+            "Port may be in use or blocked by firewall: {}",
+            bind_result.err().map(|e| e.to_string()).unwrap_or_default()
+        ),
     );
 
     // 4. Daemon Status
     let status_path = Config::status_path()?;
     let daemon_running = status_path.exists();
-    render_doctor_check("Daemon Running", daemon_running, "Start with `flky daemon` to enable remote control");
+    render_doctor_check(
+        "Daemon Running",
+        daemon_running,
+        "Start with `flky daemon` to enable remote control",
+    );
 
     // 5. Config Check
     let config_path = Config::default_path()?;
-    render_doctor_check("Config File exists", config_path.exists(), &format!("Run `flky pair init` to create default config at {}", config_path.display()));
+    render_doctor_check(
+        "Config File exists",
+        config_path.exists(),
+        &format!(
+            "Run `flky pair init` to create default config at {}",
+            config_path.display()
+        ),
+    );
 
     println!();
     println!("Diagnostics complete.");

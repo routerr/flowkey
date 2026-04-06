@@ -72,9 +72,7 @@ impl InputCapture for MacosCapture {
                                 let _ = sender.send(signal);
                                 Some(event)
                             }
-                            CaptureSignal::HotkeySuppressed => {
-                                Some(event)
-                            }
+                            CaptureSignal::HotkeySuppressed => Some(event),
                             CaptureSignal::Input(_) => {
                                 let _ = sender.send(signal);
                                 if suppression_enabled.load(Ordering::SeqCst) {

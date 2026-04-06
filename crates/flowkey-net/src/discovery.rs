@@ -143,7 +143,7 @@ fn peer_from_resolved_service(service: &mdns_sd::ResolvedService) -> Option<Disc
             }
         }
     }
-    
+
     addrs.sort(); // Predictable order
     addrs.dedup();
 
