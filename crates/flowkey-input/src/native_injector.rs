@@ -42,11 +42,16 @@ pub struct NativeInputSink {
     #[cfg(target_os = "macos")]
     cursor_position: Option<(f64, f64)>,
     #[cfg(target_os = "macos")]
-    dock_revealed_by_flowkey: bool,
+    dock_proxy_state: DockProxyState,
     #[cfg(target_os = "macos")]
-    last_dock_toggle_at: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    dock_reveal_armed: bool,
+    last_dock_action_at: Option<Instant>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DockProxyState {
+    Hidden,
+    Visible,
 }
 
 impl NativeInputSink {
@@ -70,11 +75,9 @@ impl NativeInputSink {
             #[cfg(target_os = "macos")]
             cursor_position: None,
             #[cfg(target_os = "macos")]
-            dock_revealed_by_flowkey: false,
+            dock_proxy_state: DockProxyState::Hidden,
             #[cfg(target_os = "macos")]
-            last_dock_toggle_at: None,
-            #[cfg(target_os = "macos")]
-            dock_reveal_armed: true,
+            last_dock_action_at: None,
         })
     }
 
@@ -319,106 +322,77 @@ impl NativeInputSink {
         let distance_from_bottom = target.1 - bounds.min_y;
         let reveal_threshold = 1.0;
         let hide_threshold = (screen_height * 0.10).max(24.0);
-        let rearm_threshold = (screen_height * 0.04).max(12.0);
-
-        if !self.dock_revealed_by_flowkey && distance_from_bottom > rearm_threshold {
-            self.dock_reveal_armed = true;
-        }
-
-        if !self.dock_revealed_by_flowkey
-            && self.dock_reveal_armed
-            && distance_from_bottom <= reveal_threshold
-        {
-            if self.toggle_macos_dock_visibility()? {
-                self.dock_revealed_by_flowkey = true;
-                self.dock_reveal_armed = false;
-                debug!(
-                    platform = self.platform,
-                    cursor_y = target.1,
-                    distance_from_bottom,
-                    hide_threshold,
-                    rearm_threshold,
-                    "revealed macOS Dock via proxy hotkey at bottom edge"
-                );
+        match dock_proxy_transition(
+            self.dock_proxy_state,
+            distance_from_bottom,
+            reveal_threshold,
+            hide_threshold,
+        ) {
+            Some(DockProxyAction::Show) => {
+                if self.trigger_macos_dock_show()? {
+                    self.dock_proxy_state = DockProxyState::Visible;
+                    debug!(
+                        platform = self.platform,
+                        cursor_y = target.1,
+                        distance_from_bottom,
+                        hide_threshold,
+                        "revealed macOS Dock via proxy state machine"
+                    );
+                }
             }
-        } else if self.dock_revealed_by_flowkey && distance_from_bottom > hide_threshold {
-            if self.toggle_macos_dock_visibility()? {
-                self.dock_revealed_by_flowkey = false;
-                self.dock_reveal_armed = distance_from_bottom > rearm_threshold;
-                debug!(
-                    platform = self.platform,
-                    cursor_y = target.1,
-                    distance_from_bottom,
-                    hide_threshold,
-                    rearm_threshold,
-                    "hid macOS Dock via proxy hotkey after upward movement"
-                );
+            Some(DockProxyAction::Hide) => {
+                if self.trigger_macos_dock_hide()? {
+                    self.dock_proxy_state = DockProxyState::Hidden;
+                    debug!(
+                        platform = self.platform,
+                        cursor_y = target.1,
+                        distance_from_bottom,
+                        hide_threshold,
+                        "hid macOS Dock via proxy state machine"
+                    );
+                }
             }
+            None => {}
         }
 
         Ok(())
     }
 
     #[cfg(target_os = "macos")]
-    fn toggle_macos_dock_visibility(&mut self) -> Result<bool, String> {
+    fn trigger_macos_dock_show(&mut self) -> Result<bool, String> {
         let now = Instant::now();
-        if let Some(last_toggle_at) = self.last_dock_toggle_at {
-            if now.duration_since(last_toggle_at) < Duration::from_millis(350) {
+        if let Some(last_action_at) = self.last_dock_action_at {
+            if now.duration_since(last_action_at) < Duration::from_millis(350) {
                 return Ok(false);
             }
         }
 
-        self.record_loopback(&InputEvent::KeyDown {
-            code: "MetaLeft".to_string(),
-            modifiers: Modifiers {
-                meta: true,
-                ..self.current_modifiers
-            },
-        });
-        self.record_loopback(&InputEvent::KeyDown {
-            code: "AltLeft".to_string(),
-            modifiers: Modifiers {
-                alt: true,
-                meta: true,
-                ..self.current_modifiers
-            },
-        });
-        self.record_loopback(&InputEvent::KeyDown {
-            code: "KeyD".to_string(),
-            modifiers: Modifiers {
-                alt: true,
-                meta: true,
-                ..self.current_modifiers
-            },
-        });
-        self.record_loopback(&InputEvent::KeyUp {
-            code: "KeyD".to_string(),
-            modifiers: Modifiers {
-                alt: true,
-                meta: true,
-                ..self.current_modifiers
-            },
-        });
-        self.record_loopback(&InputEvent::KeyUp {
-            code: "AltLeft".to_string(),
-            modifiers: Modifiers {
-                meta: true,
-                ..self.current_modifiers
-            },
-        });
-        self.record_loopback(&InputEvent::KeyUp {
-            code: "MetaLeft".to_string(),
-            modifiers: self.current_modifiers,
-        });
+        post_modified_macos_key_chord(
+            CONTROL_KEYCODE,
+            F3_KEYCODE,
+            &self.current_modifiers,
+            &self.loopback,
+        )?;
+        self.last_dock_action_at = Some(now);
+        Ok(true)
+    }
 
-        post_macos_key_event(LEFT_COMMAND_KEYCODE, true)?;
-        post_macos_key_event(LEFT_OPTION_KEYCODE, true)?;
-        post_macos_key_event(D_KEYCODE, true)?;
-        post_macos_key_event(D_KEYCODE, false)?;
-        post_macos_key_event(LEFT_OPTION_KEYCODE, false)?;
-        post_macos_key_event(LEFT_COMMAND_KEYCODE, false)?;
+    #[cfg(target_os = "macos")]
+    fn trigger_macos_dock_hide(&mut self) -> Result<bool, String> {
+        let now = Instant::now();
+        if let Some(last_action_at) = self.last_dock_action_at {
+            if now.duration_since(last_action_at) < Duration::from_millis(350) {
+                return Ok(false);
+            }
+        }
 
-        self.last_dock_toggle_at = Some(now);
+        post_simple_macos_key(
+            ESCAPE_KEYCODE,
+            "Escape",
+            &self.current_modifiers,
+            &self.loopback,
+        )?;
+        self.last_dock_action_at = Some(now);
         Ok(true)
     }
 
@@ -535,8 +509,7 @@ impl NativeInputSink {
         #[cfg(target_os = "macos")]
         {
             self.cursor_position = None;
-            self.dock_revealed_by_flowkey = false;
-            self.dock_reveal_armed = true;
+            self.dock_proxy_state = DockProxyState::Hidden;
         }
         Ok(())
     }
@@ -588,13 +561,38 @@ fn macos_posted_delta(requested: i32, applied: i32) -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-const D_KEYCODE: CGKeyCode = 0x02;
+const CONTROL_KEYCODE: CGKeyCode = 0x3B;
 
 #[cfg(target_os = "macos")]
-const LEFT_COMMAND_KEYCODE: CGKeyCode = 0x37;
+const F3_KEYCODE: CGKeyCode = 0x63;
 
 #[cfg(target_os = "macos")]
-const LEFT_OPTION_KEYCODE: CGKeyCode = 0x3A;
+const ESCAPE_KEYCODE: CGKeyCode = 0x35;
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DockProxyAction {
+    Show,
+    Hide,
+}
+
+#[cfg(target_os = "macos")]
+fn dock_proxy_transition(
+    state: DockProxyState,
+    distance_from_bottom: f64,
+    reveal_threshold: f64,
+    hide_threshold: f64,
+) -> Option<DockProxyAction> {
+    match state {
+        DockProxyState::Hidden if distance_from_bottom <= reveal_threshold => {
+            Some(DockProxyAction::Show)
+        }
+        DockProxyState::Visible if distance_from_bottom > hide_threshold => {
+            Some(DockProxyAction::Hide)
+        }
+        _ => None,
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn post_macos_key_event(keycode: CGKeyCode, key_down: bool) -> Result<(), String> {
@@ -604,6 +602,92 @@ fn post_macos_key_event(keycode: CGKeyCode, key_down: bool) -> Result<(), String
         .map_err(|_| "failed to create macOS keyboard event".to_string())?;
     event.post(CGEventTapLocation::HID);
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn post_simple_macos_key(
+    keycode: CGKeyCode,
+    loopback_code: &str,
+    current_modifiers: &Modifiers,
+    loopback: &Option<SharedLoopbackSuppressor>,
+) -> Result<(), String> {
+    record_loopback_key_event(loopback, loopback_code, true, *current_modifiers);
+    record_loopback_key_event(loopback, loopback_code, false, *current_modifiers);
+    post_macos_key_event(keycode, true)?;
+    post_macos_key_event(keycode, false)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn post_modified_macos_key_chord(
+    modifier_keycode: CGKeyCode,
+    keycode: CGKeyCode,
+    current_modifiers: &Modifiers,
+    loopback: &Option<SharedLoopbackSuppressor>,
+) -> Result<(), String> {
+    record_loopback_key_event(
+        loopback,
+        "ControlLeft",
+        true,
+        Modifiers {
+            control: true,
+            ..*current_modifiers
+        },
+    );
+    record_loopback_key_event(
+        loopback,
+        "F3",
+        true,
+        Modifiers {
+            control: true,
+            ..*current_modifiers
+        },
+    );
+    record_loopback_key_event(
+        loopback,
+        "F3",
+        false,
+        Modifiers {
+            control: true,
+            ..*current_modifiers
+        },
+    );
+    record_loopback_key_event(loopback, "ControlLeft", false, *current_modifiers);
+
+    post_macos_key_event(modifier_keycode, true)?;
+    post_macos_key_event(keycode, true)?;
+    post_macos_key_event(keycode, false)?;
+    post_macos_key_event(modifier_keycode, false)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn record_loopback_key_event(
+    loopback: &Option<SharedLoopbackSuppressor>,
+    code: &str,
+    pressed: bool,
+    modifiers: Modifiers,
+) {
+    let Some(loopback) = loopback else {
+        return;
+    };
+
+    let event = if pressed {
+        InputEvent::KeyDown {
+            code: code.to_string(),
+            modifiers,
+        }
+    } else {
+        InputEvent::KeyUp {
+            code: code.to_string(),
+            modifiers,
+        }
+    };
+
+    let mut loopback = loopback
+        .lock()
+        .expect("loopback suppressor mutex should not be poisoned");
+    loopback.record(event);
 }
 
 #[cfg(target_os = "macos")]
@@ -649,7 +733,7 @@ impl crate::InputEventSink for NativeInputSink {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::macos_posted_delta;
+    use super::{dock_proxy_transition, macos_posted_delta, DockProxyAction, DockProxyState};
 
     #[test]
     fn preserves_edge_pressure_when_cursor_is_clamped() {
@@ -661,6 +745,30 @@ mod tests {
     fn uses_applied_delta_when_cursor_actually_moves() {
         assert_eq!(macos_posted_delta(12, 9), 9);
         assert_eq!(macos_posted_delta(-7, -5), -5);
+    }
+
+    #[test]
+    fn dock_proxy_only_shows_at_the_bottom_edge() {
+        assert_eq!(
+            dock_proxy_transition(DockProxyState::Hidden, 0.0, 1.0, 80.0),
+            Some(DockProxyAction::Show)
+        );
+        assert_eq!(
+            dock_proxy_transition(DockProxyState::Hidden, 10.0, 1.0, 80.0),
+            None
+        );
+    }
+
+    #[test]
+    fn dock_proxy_only_hides_after_leaving_the_bottom_band() {
+        assert_eq!(
+            dock_proxy_transition(DockProxyState::Visible, 20.0, 1.0, 80.0),
+            None
+        );
+        assert_eq!(
+            dock_proxy_transition(DockProxyState::Visible, 120.0, 1.0, 80.0),
+            Some(DockProxyAction::Hide)
+        );
     }
 }
 
