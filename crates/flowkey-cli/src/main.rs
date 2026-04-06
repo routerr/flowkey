@@ -293,7 +293,7 @@ async fn handle_doctor() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         let status = flowkey_platform_windows::permissions::PermissionStatus::probe();
-        render_doctor_check("Windows Interactive Session", status.interactive_session, "Run from a signed-in desktop session (not SSH/service)");
+        render_doctor_check("Windows Interactive Session", status.user_session, "Run from a signed-in desktop session (not SSH/service)");
     }
 
     // 3. Network Bind Check
