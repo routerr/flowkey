@@ -26,6 +26,8 @@ pub struct NativeInputSink {
     pressed_buttons: HashSet<Button>,
     current_modifiers: Modifiers,
     loopback: Option<SharedLoopbackSuppressor>,
+    #[cfg(target_os = "macos")]
+    cursor_position: Option<(f64, f64)>,
 }
 
 impl NativeInputSink {
@@ -46,6 +48,8 @@ impl NativeInputSink {
             pressed_buttons: HashSet::new(),
             current_modifiers: Modifiers::none(),
             loopback,
+            #[cfg(target_os = "macos")]
+            cursor_position: None,
         })
     }
 
@@ -168,13 +172,26 @@ impl NativeInputSink {
 
     #[cfg(target_os = "macos")]
     fn move_mouse_macos(&mut self, dx: i32, dy: i32) -> Result<(), String> {
-        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-            .map_err(|_| "failed to create macOS event source".to_string())?;
-        let event =
-            CGEvent::new(source).map_err(|_| "failed to read macOS mouse location".to_string())?;
-        let current = event.location();
-        let target = CGPoint::new(current.x + f64::from(dx), current.y + f64::from(dy));
-        CGDisplay::warp_mouse_cursor_position(target).map_err(|error| format!("{error:?}"))
+        let current = match self.cursor_position {
+            Some(pos) => pos,
+            None => {
+                // First move: read the actual cursor position from the system.
+                // CGEventSourceStateID::HIDSystemState is fine here because no
+                // programmatic warps have occurred yet (or cursor_position was
+                // reset after the last control session).
+                let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+                    .map_err(|_| "failed to create macOS event source".to_string())?;
+                let event = CGEvent::new(source)
+                    .map_err(|_| "failed to read macOS mouse location".to_string())?;
+                let loc = event.location();
+                (loc.x, loc.y)
+            }
+        };
+        let target = (current.0 + f64::from(dx), current.1 + f64::from(dy));
+        CGDisplay::warp_mouse_cursor_position(CGPoint::new(target.0, target.1))
+            .map_err(|error| format!("{error:?}"))?;
+        self.cursor_position = Some(target);
+        Ok(())
     }
 
     fn key_action(&mut self, key_code: KeyCode, direction: Direction) -> Result<(), String> {
@@ -287,6 +304,10 @@ impl NativeInputSink {
         self.pressed_keys.clear();
         self.pressed_buttons.clear();
         self.current_modifiers = Modifiers::none();
+        #[cfg(target_os = "macos")]
+        {
+            self.cursor_position = None;
+        }
         Ok(())
     }
 }
