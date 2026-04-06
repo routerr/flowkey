@@ -7,7 +7,7 @@ use flowkey_input::capture::{CaptureSignal, CaptureState, InputCapture, LocalInp
 use flowkey_input::event::InputEvent;
 use flowkey_input::hotkey::{HotkeyBinding, HotkeyTracker};
 use flowkey_input::loopback::SharedLoopbackSuppressor;
-use tracing::warn;
+use tracing::{debug, warn};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
     SM_YVIRTUALSCREEN,
@@ -128,10 +128,26 @@ impl InputCapture for WindowsExclusiveCapture {
                             if suppression_enabled.load(Ordering::SeqCst) {
                                 if matches!(input, InputEvent::MouseMove { .. }) {
                                     if let Some(center) = recenter_cursor_to_virtual_center() {
+                                        if let InputEvent::MouseMove { dx, dy, .. } = input {
+                                            debug!(
+                                                dx,
+                                                dy,
+                                                center_x = center.0,
+                                                center_y = center.1,
+                                                "recentering suppressed Windows cursor after forwarded mouse move"
+                                            );
+                                        }
                                         state.last_mouse_position = Some(center);
                                         *grab_pending_recenter.lock().unwrap() = Some(center);
                                     } else {
                                         // Fall back to the old behavior if we fail to recenter.
+                                        if let InputEvent::MouseMove { dx, dy, .. } = input {
+                                            debug!(
+                                                dx,
+                                                dy,
+                                                "failed to recenter suppressed Windows cursor; preserving previous baseline"
+                                            );
+                                        }
                                         state.last_mouse_position = saved_mouse_position;
                                     }
                                 } else {

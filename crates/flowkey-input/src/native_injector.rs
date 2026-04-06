@@ -3,7 +3,7 @@ use std::collections::HashSet;
 #[cfg(not(target_os = "macos"))]
 use enigo::Coordinate;
 use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
-use tracing::warn;
+use tracing::{debug, warn};
 
 #[cfg(target_os = "macos")]
 use core_graphics::display::CGDisplay;
@@ -201,6 +201,7 @@ impl NativeInputSink {
         let posted_dx = macos_posted_delta(dx, round_delta(target.0 - current.0));
         let posted_dy = macos_posted_delta(dy, round_delta(target.1 - current.1));
         let dest = CGPoint::new(target.0, target.1);
+        let clamped = target != raw_target;
 
         // Always warp the cursor first — this is reliable, invisible to the
         // event system (no CGEvent generated), and keeps the OS cursor in sync.
@@ -256,6 +257,24 @@ impl NativeInputSink {
                 i64::from(posted_dy),
             );
             event.post(CGEventTapLocation::HID);
+        }
+
+        if clamped || posted_dx != dx || posted_dy != dy {
+            debug!(
+                platform = self.platform,
+                current_x = current.0,
+                current_y = current.1,
+                raw_target_x = raw_target.0,
+                raw_target_y = raw_target.1,
+                target_x = target.0,
+                target_y = target.1,
+                requested_dx = dx,
+                requested_dy = dy,
+                posted_dx,
+                posted_dy,
+                buttons_pressed = self.pressed_buttons.len(),
+                "macOS mouse move reached edge-sensitive injection path"
+            );
         }
 
         self.cursor_position = Some(target);
