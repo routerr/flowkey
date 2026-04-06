@@ -5,12 +5,14 @@ use std::time::{Duration, Instant};
 #[cfg(not(target_os = "macos"))]
 use enigo::Coordinate;
 use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
-use tracing::{debug, warn};
+#[cfg(target_os = "macos")]
+use tracing::debug;
+use tracing::warn;
 
 #[cfg(target_os = "macos")]
 use core_graphics::display::CGDisplay;
 #[cfg(target_os = "macos")]
-use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton};
+use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGKeyCode, CGMouseButton};
 #[cfg(target_os = "macos")]
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 #[cfg(target_os = "macos")]
@@ -409,21 +411,12 @@ impl NativeInputSink {
             modifiers: self.current_modifiers,
         });
 
-        self.enigo
-            .key(Key::Meta, Direction::Press)
-            .map_err(|error| error.to_string())?;
-        self.enigo
-            .key(Key::Alt, Direction::Press)
-            .map_err(|error| error.to_string())?;
-        self.enigo
-            .key(Key::Unicode('d'), Direction::Click)
-            .map_err(|error| error.to_string())?;
-        self.enigo
-            .key(Key::Alt, Direction::Release)
-            .map_err(|error| error.to_string())?;
-        self.enigo
-            .key(Key::Meta, Direction::Release)
-            .map_err(|error| error.to_string())?;
+        post_macos_key_event(LEFT_COMMAND_KEYCODE, true)?;
+        post_macos_key_event(LEFT_OPTION_KEYCODE, true)?;
+        post_macos_key_event(D_KEYCODE, true)?;
+        post_macos_key_event(D_KEYCODE, false)?;
+        post_macos_key_event(LEFT_OPTION_KEYCODE, false)?;
+        post_macos_key_event(LEFT_COMMAND_KEYCODE, false)?;
 
         self.last_dock_toggle_at = Some(now);
         Ok(true)
@@ -592,6 +585,25 @@ fn macos_posted_delta(requested: i32, applied: i32) -> i32 {
     } else {
         applied
     }
+}
+
+#[cfg(target_os = "macos")]
+const D_KEYCODE: CGKeyCode = 0x02;
+
+#[cfg(target_os = "macos")]
+const LEFT_COMMAND_KEYCODE: CGKeyCode = 0x37;
+
+#[cfg(target_os = "macos")]
+const LEFT_OPTION_KEYCODE: CGKeyCode = 0x3A;
+
+#[cfg(target_os = "macos")]
+fn post_macos_key_event(keycode: CGKeyCode, key_down: bool) -> Result<(), String> {
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| "failed to create macOS event source for keyboard event".to_string())?;
+    let event = CGEvent::new_keyboard_event(source, keycode, key_down)
+        .map_err(|_| "failed to create macOS keyboard event".to_string())?;
+    event.post(CGEventTapLocation::HID);
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
