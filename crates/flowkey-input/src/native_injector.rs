@@ -12,7 +12,9 @@ use tracing::warn;
 #[cfg(target_os = "macos")]
 use core_graphics::display::CGDisplay;
 #[cfg(target_os = "macos")]
-use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGKeyCode, CGMouseButton};
+use core_graphics::event::{
+    CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode, CGMouseButton,
+};
 #[cfg(target_os = "macos")]
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 #[cfg(target_os = "macos")]
@@ -599,6 +601,17 @@ const LEFT_COMMAND_KEYCODE: CGKeyCode = 0x37;
 const LEFT_OPTION_KEYCODE: CGKeyCode = 0x3A;
 
 #[cfg(target_os = "macos")]
+fn keycode_to_event_flag(keycode: CGKeyCode) -> CGEventFlags {
+    match keycode {
+        LEFT_COMMAND_KEYCODE => CGEventFlags::CGEventFlagCommand,
+        LEFT_OPTION_KEYCODE => CGEventFlags::CGEventFlagAlternate,
+        0x38 => CGEventFlags::CGEventFlagShift,    // Left Shift
+        0x3B => CGEventFlags::CGEventFlagControl,   // Left Control
+        _ => CGEventFlags::CGEventFlagNull,
+    }
+}
+
+#[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DockProxyAction {
     Show,
@@ -636,11 +649,12 @@ fn dock_proxy_transition(
 }
 
 #[cfg(target_os = "macos")]
-fn post_macos_key_event(keycode: CGKeyCode, key_down: bool) -> Result<(), String> {
+fn post_macos_key_event(keycode: CGKeyCode, key_down: bool, flags: CGEventFlags) -> Result<(), String> {
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| "failed to create macOS event source for keyboard event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)
         .map_err(|_| "failed to create macOS keyboard event".to_string())?;
+    event.set_flags(flags);
     event.post(CGEventTapLocation::HID);
     Ok(())
 }
@@ -697,12 +711,16 @@ fn post_modified_macos_key_chord(
     );
     record_loopback_key_event(loopback, first_code, false, *current_modifiers);
 
-    post_macos_key_event(first_keycode, true)?;
-    post_macos_key_event(second_keycode, true)?;
-    post_macos_key_event(keycode, true)?;
-    post_macos_key_event(keycode, false)?;
-    post_macos_key_event(second_keycode, false)?;
-    post_macos_key_event(first_keycode, false)?;
+    let first_flag = keycode_to_event_flag(first_keycode);
+    let second_flag = keycode_to_event_flag(second_keycode);
+    let both_flags = first_flag | second_flag;
+
+    post_macos_key_event(first_keycode, true, first_flag)?;
+    post_macos_key_event(second_keycode, true, both_flags)?;
+    post_macos_key_event(keycode, true, both_flags)?;
+    post_macos_key_event(keycode, false, both_flags)?;
+    post_macos_key_event(second_keycode, false, first_flag)?;
+    post_macos_key_event(first_keycode, false, CGEventFlags::CGEventFlagNull)?;
     Ok(())
 }
 
