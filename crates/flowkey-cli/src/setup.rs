@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use flowkey_config::{Config, PeerConfig};
+use flowkey_config::{CaptureMode, Config, PeerConfig};
 use flowkey_crypto::{HandshakeOffer, NodeIdentity};
 use flowkey_net::discovery::{discover, DiscoveredPeer};
 use inquire::{Select, Text};
@@ -61,7 +61,35 @@ pub async fn run_interactive_setup() -> Result<()> {
         println!("Hotkey kept as '{}'.\n", config.switch.hotkey);
     }
 
-    // 4. Discovery
+    // 4. Configure Capture Mode
+    let capture_modes = vec![
+        "Passive (Standard - input events are captured and passed through)",
+        "Exclusive (Advanced - input events are intercepted and suppressed on the local machine when switching)",
+    ];
+
+    let current_capture_mode = config.switch.capture_mode;
+    println!("Current capture mode is: {}", current_capture_mode.as_str());
+
+    let capture_mode_choice = Select::new("Choose a capture mode:", capture_modes)
+        .with_help_message("Passive is recommended for most users. Exclusive mode provides better isolation but requires more permissions.")
+        .prompt()
+        .context("failed to prompt for capture mode")?;
+
+    let new_capture_mode = if capture_mode_choice.starts_with("Passive") {
+        CaptureMode::Passive
+    } else {
+        CaptureMode::Exclusive
+    };
+
+    if new_capture_mode != current_capture_mode {
+        config.switch.capture_mode = new_capture_mode;
+        config.save().context("failed to save config")?;
+        println!("Capture mode updated to '{}'.\n", config.switch.capture_mode.as_str());
+    } else {
+        println!("Capture mode kept as '{}'.\n", config.switch.capture_mode.as_str());
+    }
+
+    // 5. Discovery
     println!("Searching for flowkey devices on the local network (2 seconds)...");
     let mut discovered = match discover(Duration::from_secs(2)) {
         Ok(peers) => peers,
@@ -95,7 +123,7 @@ pub async fn run_interactive_setup() -> Result<()> {
         println!("No other devices found on the local network.");
     }
 
-    // 5. Pairing Token Exchange
+    // 6. Pairing Token Exchange
     println!("\n--- Pairing ---");
     println!("To connect two devices, they must trust each other's pairing tokens.");
     
