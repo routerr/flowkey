@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, SocketAddr};
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use flowkey_config::Config;
-use mdns_sd::{ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
 pub const SERVICE_TYPE: &str = "_flky._tcp.local.";
 const PROPERTY_NODE_ID: &str = "node_id";
@@ -44,9 +44,18 @@ pub fn advertise(config: &Config) -> Result<DiscoveryAdvertisement> {
         .parse()
         .with_context(|| format!("invalid advertised address {advertised_addr}"))?;
     let hostname = format!("{}.local.", sanitize_label(&config.node.id));
+
+    let routable_ips = Config::local_routable_ips()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ip| ip.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
     let properties = [
         (PROPERTY_NODE_ID, config.node.id.as_str()),
         (PROPERTY_NODE_NAME, config.node.name.as_str()),
+        ("ips", routable_ips.as_str()),
     ];
     let service = ServiceInfo::new(
         SERVICE_TYPE,
@@ -121,6 +130,19 @@ fn peer_from_resolved_service(service: &mdns_sd::ResolvedService) -> Option<Disc
         .filter(|ip| !ip.is_loopback())
         .map(|ip| SocketAddr::new(ip, service.port).to_string())
         .collect();
+
+    if let Some(ips_str) = service.txt_properties.get_property_val_str("ips") {
+        for ip_str in ips_str.split(',') {
+            if let Ok(ip) = ip_str.trim().parse::<std::net::IpAddr>() {
+                if !ip.is_loopback() {
+                    let addr = SocketAddr::new(ip, service.port).to_string();
+                    if !addrs.contains(&addr) {
+                        addrs.push(addr);
+                    }
+                }
+            }
+        }
+    }
     
     addrs.sort(); // Predictable order
     addrs.dedup();
