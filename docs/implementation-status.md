@@ -40,10 +40,12 @@
 - **Fast IPC (macOS)**: Unix Domain Socket listener for near-instant CLI-to-Daemon command response
 - **Zero-Copy Pairing Protocol**: SHA3-based automated key exchange engine
 - **GUI Scaffolding**: Tauri application initialized with system tray and backend IPC commands
+- **Management GUI Frontend**: React/TypeScript dashboard for pairing and control
 
 ## In Progress
 
-- **Management GUI Frontend**: React/TypeScript dashboard for pairing and control
+- **Lifecycle & Integration Polish**: Background behaviors, dynamic tray menus, and auto-start
+- **Remote Control Mode**: "Accept Toggle Control" for one-click takeover
 - **mDNS Pairing Discovery**: Real-time visual feedback of devices in pairing mode
 
 ## Partial
