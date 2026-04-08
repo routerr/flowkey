@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
 import { listen } from '@tauri-apps/api/event'
-import type { DiscoveredPeer, Config, DaemonStatus } from './types'
+import { type DiscoveredPeer, type Config, type DaemonStatus } from './types'
 import './App.css'
 
 function App() {
