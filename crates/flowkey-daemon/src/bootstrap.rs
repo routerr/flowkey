@@ -1112,7 +1112,7 @@ fn advertise_discovery_service(
     runtime: &Arc<Mutex<DaemonRuntime>>,
     status_path: &std::path::Path,
 ) -> Option<DiscoveryAdvertisement> {
-    match flowkey_net::discovery::advertise(config) {
+    match flowkey_net::discovery::advertise(config, false, None) {
         Ok(discovery) => {
             {
                 let mut runtime = runtime

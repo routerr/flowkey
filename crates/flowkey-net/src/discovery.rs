@@ -5,10 +5,13 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use flowkey_config::Config;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use serde::Serialize;
 
 pub const SERVICE_TYPE: &str = "_flky._tcp.local.";
-const PROPERTY_NODE_ID: &str = "node_id";
-const PROPERTY_NODE_NAME: &str = "node_name";
+pub const PROPERTY_NODE_ID: &str = "node_id";
+pub const PROPERTY_NODE_NAME: &str = "node_name";
+pub const PROPERTY_IS_PAIRING: &str = "is_pairing";
+pub const PROPERTY_PAIRING_PORT: &str = "pairing_port";
 
 pub struct DiscoveryAdvertisement {
     daemon: ServiceDaemon,
@@ -27,16 +30,18 @@ impl DiscoveryAdvertisement {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiscoveredPeer {
     pub id: String,
     pub name: String,
     pub addrs: Vec<String>,
     pub hostname: String,
     pub service_name: String,
+    pub is_pairing: bool,
+    pub pairing_port: Option<u16>,
 }
 
-pub fn advertise(config: &Config) -> Result<DiscoveryAdvertisement> {
+pub fn advertise(config: &Config, is_pairing: bool, pairing_port: Option<u16>) -> Result<DiscoveryAdvertisement> {
     let advertised_addr = config
         .advertised_listen_addr()
         .context("failed to derive advertised listen address for discovery")?;
@@ -52,11 +57,19 @@ pub fn advertise(config: &Config) -> Result<DiscoveryAdvertisement> {
         .collect::<Vec<_>>()
         .join(",");
 
-    let properties = [
+    let mut properties = vec![
         (PROPERTY_NODE_ID, config.node.id.as_str()),
         (PROPERTY_NODE_NAME, config.node.name.as_str()),
+        (PROPERTY_IS_PAIRING, if is_pairing { "true" } else { "false" }),
         ("ips", routable_ips.as_str()),
     ];
+
+    let port_str;
+    if let Some(port) = pairing_port {
+        port_str = port.to_string();
+        properties.push((PROPERTY_PAIRING_PORT, port_str.as_str()));
+    }
+
     let service = ServiceInfo::new(
         SERVICE_TYPE,
         &config.node.id,
@@ -151,12 +164,25 @@ fn peer_from_resolved_service(service: &mdns_sd::ResolvedService) -> Option<Disc
         return None;
     }
 
+    let is_pairing = service
+        .txt_properties
+        .get_property_val_str(PROPERTY_IS_PAIRING)
+        .map(|val| val == "true")
+        .unwrap_or(false);
+
+    let pairing_port = service
+        .txt_properties
+        .get_property_val_str(PROPERTY_PAIRING_PORT)
+        .and_then(|val| val.parse::<u16>().ok());
+
     Some(DiscoveredPeer {
         id,
         name,
         addrs,
         hostname: service.host.clone(),
         service_name: service.fullname.clone(),
+        is_pairing,
+        pairing_port,
     })
 }
 
@@ -195,7 +221,11 @@ mod tests {
 
     #[test]
     fn resolved_service_maps_to_discovered_peer() {
-        let properties = [("node_id", "office-pc"), ("node_name", "Office PC")];
+        let properties = [
+            ("node_id", "office-pc"),
+            ("node_name", "Office PC"),
+            ("is_pairing", "true"),
+        ];
         let service = ServiceInfo::new(
             "_flky._tcp.local.",
             "office-pc",
@@ -212,6 +242,7 @@ mod tests {
         assert_eq!(peer.name, "Office PC");
         assert_eq!(peer.addrs, vec!["192.168.1.25:48571".to_string()]);
         assert_eq!(peer.hostname, "office-pc.local.");
+        assert!(peer.is_pairing);
     }
 
     #[test]
