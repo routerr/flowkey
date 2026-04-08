@@ -34,6 +34,17 @@
 - **Automatic Control Resume**: Role persistence across reconnects
 - **Reachability Probing (FRP)**: Parallel UDP racing for multi-IP zero-config switching
 - **`flky doctor`**: System diagnostic tool for permissions and network
+- **Binary Protocol (Bincode)**: Replaced JSON with Bincode for high-performance event serialization
+- **High-Precision Timestamps**: Microsecond capture-time timestamps for all input events
+- **Bounded Channels**: `crossbeam-channel` integration with "last-event-wins" dropping policy for mouse moves
+- **Fast IPC (macOS)**: Unix Domain Socket listener for near-instant CLI-to-Daemon command response
+- **Zero-Copy Pairing Protocol**: SHA3-based automated key exchange engine
+- **GUI Scaffolding**: Tauri application initialized with system tray and backend IPC commands
+
+## In Progress
+
+- **Management GUI Frontend**: React/TypeScript dashboard for pairing and control
+- **mDNS Pairing Discovery**: Real-time visual feedback of devices in pairing mode
 
 ## Partial
 
