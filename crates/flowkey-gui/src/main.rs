@@ -107,6 +107,54 @@ async fn cancel_pairing(state: State<'_, AppState>) -> Result<(), String> {
   Ok(())
 }
 
+#[tauri::command]
+async fn remove_peer(peer_id: String) -> Result<(), String> {
+  let mut config = Config::load_or_default().map_err(|e| e.to_string())?;
+  config.peers.retain(|p| p.id != peer_id);
+  config.save().map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+async fn switch_to_peer(peer_id: String) -> Result<(), String> {
+  let control_path = Config::control_path().map_err(|e| e.to_string())?;
+  let cmd = flowkey_core::DaemonCommand::switch(peer_id);
+  
+  #[cfg(target_os = "macos")]
+  {
+    let socket_path = control_path.with_extension("sock");
+    if socket_path.exists() {
+      if let Ok(mut stream) = tokio::net::UnixStream::connect(&socket_path).await {
+        if cmd.send_to(&mut stream).await.is_ok() {
+          return Ok(());
+        }
+      }
+    }
+  }
+
+  cmd.save_to_path(&control_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn release_control() -> Result<(), String> {
+  let control_path = Config::control_path().map_err(|e| e.to_string())?;
+  let cmd = flowkey_core::DaemonCommand::release();
+  
+  #[cfg(target_os = "macos")]
+  {
+    let socket_path = control_path.with_extension("sock");
+    if socket_path.exists() {
+      if let Ok(mut stream) = tokio::net::UnixStream::connect(&socket_path).await {
+        if cmd.send_to(&mut stream).await.is_ok() {
+          return Ok(());
+        }
+      }
+    }
+  }
+
+  cmd.save_to_path(&control_path).map_err(|e| e.to_string())
+}
+
 fn main() {
   let open = CustomMenuItem::new("open".to_string(), "Open Manager");
   let quit = CustomMenuItem::new("quit".to_string(), "Quit");
@@ -141,12 +189,26 @@ fn main() {
       _ => {}
     })
     .setup(|app| {
-      let _app_handle = app.handle();
+      let app_handle = app.handle();
       
       // Start daemon in background
       tokio::spawn(async move {
         if let Ok(config) = Config::load_or_create() {
           let _ = flowkey_daemon::run_daemon(config).await;
+        }
+      });
+
+      // Periodically emit daemon status to frontend
+      let status_handle = app.handle();
+      tokio::spawn(async move {
+        let status_path = Config::status_path().unwrap();
+        loop {
+          if status_path.exists() {
+            if let Ok(status) = flowkey_core::DaemonStatus::load_from_path(&status_path) {
+              let _ = status_handle.emit_all("daemon-status", status);
+            }
+          }
+          tokio::time::sleep(Duration::from_millis(1000)).await;
         }
       });
 
@@ -158,7 +220,10 @@ fn main() {
       enter_pairing_mode,
       connect_to_peer,
       confirm_pairing,
-      cancel_pairing
+      cancel_pairing,
+      remove_peer,
+      switch_to_peer,
+      release_control
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

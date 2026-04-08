@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
-import { DiscoveredPeer, Config } from './types'
+import { listen } from '@tauri-apps/api/event'
+import { DiscoveredPeer, Config, DaemonStatus } from './types'
 import './App.css'
 
 function App() {
   const [config, setConfig] = useState<Config | null>(null)
+  const [status, setStatus] = useState<DaemonStatus | null>(null)
   const [discoveredPeers, setDiscoveredPeers] = useState<DiscoveredPeer[]>([])
   const [pairingSas, setPairingSas] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -13,6 +15,16 @@ function App() {
   // Load config on mount
   useEffect(() => {
     loadConfig()
+  }, [])
+
+  // Listen for daemon status events
+  useEffect(() => {
+    const unlisten = listen<DaemonStatus>('daemon-status', (event) => {
+      setStatus(event.payload)
+    })
+    return () => {
+      unlisten.then(fn => fn())
+    }
   }, [])
 
   // Poll for discovery
@@ -55,8 +67,6 @@ function App() {
       return
     }
     
-    // Pick the first address and use the pairing port
-    // Usually addrs are like "192.168.1.5:48571"
     const ip = peer.addrs[0].split(':')[0]
     const addr = `${ip}:${peer.pairing_port}`
     
@@ -92,10 +102,43 @@ function App() {
     }
   }
 
+  async function removePeer(peerId: string) {
+    if (!confirm(`Are you sure you want to remove peer ${peerId}?`)) return
+    try {
+      await invoke('remove_peer', { peerId })
+      loadConfig()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  async function switchToPeer(peerId: string) {
+    try {
+      await invoke('switch_to_peer', { peerId })
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  async function releaseControl() {
+    try {
+      await invoke('release_control')
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
   return (
     <div className="container">
       <header>
-        <h1>flowkey Manager</h1>
+        <div className="title-area">
+          <h1>flowkey Manager</h1>
+          {status && (
+            <span className={`status-badge ${status.session_healthy ? 'healthy' : 'unhealthy'}`}>
+              {status.state}
+            </span>
+          )}
+        </div>
         {config && <div className="node-info">Node: {config.node.name} ({config.node.id})</div>}
       </header>
 
@@ -124,6 +167,12 @@ function App() {
         ) : (
           <div className="dashboard">
             <section className="peers-section">
+              {status?.state.startsWith('controlling') && (
+                <div className="active-control-banner">
+                  <span>Currently controlling <strong>{status.active_peer_id}</strong></span>
+                  <button onClick={releaseControl} className="btn-small btn-error">Release Control</button>
+                </div>
+              )}
               <div className="section-header">
                 <h2>Discovered Devices</h2>
                 <button onClick={startPairingMode} className="btn-small">Make Discoverable</button>
@@ -146,18 +195,48 @@ function App() {
               </ul>
             </section>
 
-            <section className="config-section">
-              <h2>Trusted Peers</h2>
-              <ul className="trusted-list">
-                {config?.peers.map(peer => (
-                  <li key={peer.id} className="trusted-item">
-                    <span>{peer.name}</span>
-                    <button className="btn-text">Remove</button>
-                  </li>
-                ))}
-                {config?.peers.length === 0 && <li className="empty">No trusted peers yet. Pair a device to get started.</li>}
-              </ul>
-            </section>
+            <div className="side-column">
+              <section className="config-section">
+                <h2>Trusted Peers</h2>
+                <ul className="trusted-list">
+                  {config?.peers.map(peer => (
+                    <li key={peer.id} className="trusted-item">
+                      <div className="peer-info">
+                        <span className="peer-name">{peer.name}</span>
+                        <span className="peer-id">{peer.id}</span>
+                      </div>
+                      <div className="peer-actions">
+                        <button onClick={() => switchToPeer(peer.id)} className="btn-small btn-primary">Control</button>
+                        <button onClick={() => removePeer(peer.id)} className="btn-text">Remove</button>
+                      </div>
+                    </li>
+                  ))}
+
+                  {config?.peers.length === 0 && <li className="empty">No trusted peers yet.</li>}
+                </ul>
+              </section>
+
+              <section className="diagnostics-section">
+                <h2>Diagnostics</h2>
+                <div className="diag-info">
+                  <div className="diag-item">
+                    <span className="label">Capture:</span>
+                    <span className={status?.local_capture_enabled ? "text-success" : "text-error"}>
+                      {status?.local_capture_enabled ? "Enabled" : "Disabled"}
+                    </span>
+                  </div>
+                  <div className="diag-item">
+                    <span className="label">Backend:</span>
+                    <span>{status?.input_injection_backend || "-"}</span>
+                  </div>
+                  <div className="notes-list">
+                    {status?.notes.map((note, i) => (
+                      <div key={i} className="note-item">• {note}</div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            </div>
           </div>
         )}
       </main>

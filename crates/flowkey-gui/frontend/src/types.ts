@@ -4,7 +4,7 @@ export interface DiscoveredPeer {
   addrs: string[];
   hostname: string;
   service_name: string;
-  is_pairing: bool;
+  is_pairing: boolean;
   pairing_port?: number;
 }
 
@@ -31,4 +31,13 @@ export interface Config {
     capture_mode: 'passive' | 'exclusive';
   };
   peers: PeerConfig[];
+}
+
+export interface DaemonStatus {
+  state: string;
+  active_peer_id?: string;
+  session_healthy: boolean;
+  local_capture_enabled: boolean;
+  input_injection_backend: string;
+  notes: string[];
 }
