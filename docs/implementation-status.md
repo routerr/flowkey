@@ -41,21 +41,13 @@
 - **Zero-Copy Pairing Protocol**: SHA3-based automated key exchange engine
 - **GUI Scaffolding**: Tauri application initialized with system tray and backend IPC commands
 - **Management GUI Frontend**: React/TypeScript dashboard for pairing and control
-
-## In Progress
-
-- **Lifecycle & Integration Polish**: Background behaviors, dynamic tray menus, and auto-start
-- **Remote Control Mode**: "Accept Toggle Control" for one-click takeover
-- **mDNS Pairing Discovery**: Real-time visual feedback of devices in pairing mode
-
-## Partial
-
-- native installers and code signing
-- graceful degradation when rdev/enigo are unavailable in non-interactive sessions
+- **Lifecycle & Integration Polish**: Background behaviors, dynamic status reporting, and peer management
 
 ## Not Started
 
 - Windows UIPI elevation or manifest for input injection
+- **Auto-start**: Launch flowkey on Login
+- **Remote Control Mode Toggle**: UI switch for allowing remote takeover
 
 ## Verified
 

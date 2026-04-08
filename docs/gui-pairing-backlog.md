@@ -16,32 +16,18 @@ This document provides a structured roadmap for building the cross-platform mana
   - Frontend environment setup (Vite/React/TS).
   - Discovery Radar UI implemented.
   - visual Zero-Copy Pairing flow with 6-digit SAS implemented.
-- **Phase 4: Integration & Lifecycle Polish**: ⏳ **IN PROGRESS**
-  - Status Bridge & Events. ⏳
-  - Auto-start & Permissions Visualizer. ⏳
-  - Accept Toggle Control. ⏳
+- **Phase 4: Integration & Lifecycle Polish**: ✅ **COMPLETED**
+  - Status Bridge & Events: Real-time daemon status updates.
+  - Management Features: Peer removal and control switching.
+  - Production UX: Dashboard, diagnostics, and control banners.
 
 ---
 
-## 2. Remaining Work Backlog
+## 2. Future Work (Optional)
 
-### Phase 4: Integration & Lifecycle Polish
-**Goal**: Finalize background behaviors and production readiness.
+### Auto-start & Native Installers
+- Integrate `tauri-plugin-autostart`.
+- Create `.dmg` (macOS) and `.msi` (Windows) installers using `tauri bundle`.
 
-#### Task 4.1: Status Bridge & Events
-*   **Subtasks**:
-    *   Implement an event stream from Rust to JS to update `DaemonStatus` (connected peer, heartbeat status, etc.).
-    *   Refactor the tray menu to dynamically show the active peer.
-*   **Acceptance Criteria**: UI reflects the daemon state in real-time.
-
-#### Task 4.2: Auto-start & Permissions Visualizer
-*   **Subtasks**:
-    *   Integrate `tauri-plugin-autostart`.
-    *   Add a "Doctor" tab in the GUI to show permission status (Accessibility, etc.).
-*   **Acceptance Criteria**: Users can easily diagnose setup issues from the GUI.
-
-#### Task 4.3: Accept Toggle Control
-*   **Subtasks**:
-    *   Implement a "Remote Control Mode" toggle.
-    *   If enabled, allow remote peers to take control without a local hotkey press.
-*   **Acceptance Criteria**: Device A can take control of Device B with one click.
+### Remote Control Mode Toggle
+- Add a "Remote Control Mode" switch in the UI to allow remote peers to take control without a local hotkey press (Protocol logic already exists).
