@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
-import { invoke } from '@tauri-apps/api/tauri'
-import { listen } from '@tauri-apps/api/event'
+import { invoke, event } from '@tauri-apps/api'
 import { type DiscoveredPeer, type Config, type DaemonStatus } from './types'
 import './App.css'
 
@@ -19,8 +18,8 @@ function App() {
 
   // Listen for daemon status events
   useEffect(() => {
-    const unlisten = listen<DaemonStatus>('daemon-status', (event) => {
-      setStatus(event.payload)
+    const unlisten = event.listen<DaemonStatus>('daemon-status', (e) => {
+      setStatus(e.payload)
     })
     return () => {
       unlisten.then(fn => fn())
