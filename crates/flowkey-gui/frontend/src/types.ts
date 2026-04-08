@@ -1,0 +1,34 @@
+export interface DiscoveredPeer {
+  id: string;
+  name: string;
+  addrs: string[];
+  hostname: string;
+  service_name: string;
+  is_pairing: bool;
+  pairing_port?: number;
+}
+
+export interface NodeConfig {
+  id: string;
+  name: string;
+  listen_addr: string;
+  advertised_addr?: string;
+  public_key: string;
+}
+
+export interface PeerConfig {
+  id: string;
+  name: string;
+  addr: string;
+  public_key: string;
+  trusted: boolean;
+}
+
+export interface Config {
+  node: NodeConfig;
+  switch: {
+    hotkey: string;
+    capture_mode: 'passive' | 'exclusive';
+  };
+  peers: PeerConfig[];
+}

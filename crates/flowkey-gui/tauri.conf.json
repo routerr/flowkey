@@ -1,10 +1,11 @@
 {
   "build": {
-    "distDir": "../dist",
-    "devPath": "http://localhost:1420",
-    "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "distDir": "frontend/dist",
+    "devPath": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
+
   "package": {
     "productName": "flowkey",
     "version": "0.1.0"
