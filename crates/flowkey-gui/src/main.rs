@@ -7,13 +7,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{CustomMenuItem, SystemTray, SystemTrayMenu, SystemTrayMenuItem, SystemTrayEvent, Manager, State};
 use flowkey_config::Config;
-use flowkey_core::daemon::DaemonRuntime;
 use flowkey_net::discovery::{DiscoveredPeer, DiscoveryAdvertisement};
 use flowkey_net::pairing::{PairingProposal, run_pairing_listener, initiate_pairing_client};
 use tokio::net::TcpListener;
 
 struct AppState {
-  runtime: Arc<Mutex<DaemonRuntime>>,
   active_pairing: Arc<Mutex<Option<PairingProposal>>>,
   active_discovery: Arc<Mutex<Option<DiscoveryAdvertisement>>>,
 }
@@ -167,7 +165,6 @@ fn main() {
 
   tauri::Builder::default()
     .manage(AppState {
-      runtime: Arc::new(Mutex::new(DaemonRuntime::new())),
       active_pairing: Arc::new(Mutex::new(None)),
       active_discovery: Arc::new(Mutex::new(None)),
     })
@@ -189,7 +186,7 @@ fn main() {
       _ => {}
     })
     .setup(|app| {
-      let app_handle = app.handle();
+      let _app_handle = app.handle();
       
       // Start daemon in background
       tokio::spawn(async move {
