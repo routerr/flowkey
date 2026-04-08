@@ -82,6 +82,7 @@ mod tests {
         let event = InputEvent::MouseButtonDown {
             button: MouseButton::Left,
             modifiers: Modifiers::none(),
+            timestamp_us: 0,
         };
 
         suppressor.record(event.clone());
@@ -101,6 +102,7 @@ mod tests {
                 alt: false,
                 meta: false,
             },
+            timestamp_us: 0,
         };
         let captured = InputEvent::KeyDown {
             code: "KeyL".to_string(),
@@ -110,6 +112,7 @@ mod tests {
                 alt: false,
                 meta: false,
             },
+            timestamp_us: 0,
         };
 
         suppressor.record(injected);

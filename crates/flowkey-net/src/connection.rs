@@ -7,8 +7,9 @@ use flowkey_protocol::message::{
     PROTOCOL_VERSION,
 };
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{interval, Duration};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use tracing::{info, warn};
 
 use crate::frame::{read_message, write_message};
@@ -42,14 +43,24 @@ pub enum SessionCommand {
 
 #[derive(Debug, Clone)]
 pub struct SessionSender {
-    sender: UnboundedSender<SessionCommand>,
+    sender: Sender<SessionCommand>,
 }
 
 impl SessionSender {
     pub fn send_input(&self, event: InputEvent) -> Result<(), String> {
-        self.sender
-            .send(SessionCommand::Input(event))
-            .map_err(|_| "session command channel closed".to_string())
+        match event {
+            InputEvent::MouseMove { .. } | InputEvent::MouseWheel { .. } => {
+                // Drop if channel is full to avoid head-of-line blocking
+                let _ = self.sender.try_send(SessionCommand::Input(event));
+                Ok(())
+            }
+            _ => {
+                // Critical events like KeyDown/Up should block (but crossbeam send is sync and won't block the executor if used from thread)
+                self.sender
+                    .send(SessionCommand::Input(event))
+                    .map_err(|_| "session command channel closed".to_string())
+            }
+        }
     }
 
     pub fn send_switch(&self, request_id: String) -> Result<(), String> {
@@ -71,8 +82,8 @@ impl SessionSender {
     }
 }
 
-pub fn session_channel() -> (SessionSender, UnboundedReceiver<SessionCommand>) {
-    let (sender, receiver) = unbounded_channel();
+pub fn session_channel() -> (SessionSender, Receiver<SessionCommand>) {
+    let (sender, receiver) = bounded(100);
     (SessionSender { sender }, receiver)
 }
 
@@ -357,9 +368,21 @@ pub async fn run_authenticated_session(
     local_node_id: &str,
     heartbeat: HeartbeatConfig,
     sink: &mut dyn flowkey_input::InputEventSink,
-    mut outbound: UnboundedReceiver<SessionCommand>,
+    outbound: Receiver<SessionCommand>,
     state_callback: &dyn SessionStateCallback,
 ) -> Result<()> {
+    let (bridge_tx, mut bridge_rx) = unbounded_channel();
+    let bridge_outbound = outbound.clone();
+    
+    // Spawn a blocking task to bridge crossbeam channel to tokio
+    tokio::task::spawn_blocking(move || {
+        while let Ok(command) = bridge_outbound.recv() {
+            if bridge_tx.send(command).is_err() {
+                break;
+            }
+        }
+    });
+
     let mut ticker = interval(Duration::from_secs(heartbeat.interval_secs));
     let mut outbound_open = true;
     let mut sequence: u64 = 0;
@@ -373,7 +396,7 @@ pub async fn run_authenticated_session(
             _ = ticker.tick() => {
                 write_message(stream, &Message::Heartbeat).await?;
             }
-            maybe_command = outbound.recv(), if outbound_open => {
+            maybe_command = bridge_rx.recv(), if outbound_open => {
                 match maybe_command {
                     Some(SessionCommand::Input(event)) => {
                         sequence = sequence.wrapping_add(1);
@@ -416,7 +439,7 @@ pub async fn run_authenticated_session(
                     }
                     Message::InputEvent { sequence, event } => {
                         info!(peer = %peer_id, sequence, event = ?event, "received input event");
-                        if let Err(error) = flowkey_net_route_input_event(sink, &event) {
+                        if let Err(error) = route_input_event(sink, &event) {
                             warn!(peer = %peer_id, %error, "input injection failed, continuing session");
                         }
                     }
@@ -446,13 +469,6 @@ pub fn route_input_event(
     event: &InputEvent,
 ) -> Result<()> {
     sink.handle(event).map_err(|error| anyhow!(error))
-}
-
-fn flowkey_net_route_input_event(
-    sink: &mut dyn flowkey_input::InputEventSink,
-    event: &InputEvent,
-) -> Result<()> {
-    route_input_event(sink, event)
 }
 
 #[cfg(test)]
@@ -671,6 +687,7 @@ mod tests {
                     alt: false,
                     meta: false,
                 },
+                timestamp_us: 123,
             })
             .expect("sender should accept event");
 
@@ -687,6 +704,7 @@ mod tests {
                         alt: false,
                         meta: false,
                     },
+                    timestamp_us: 123,
                 }
             }
         );

@@ -37,28 +37,34 @@ pub enum InputEvent {
     KeyDown {
         code: String,
         modifiers: Modifiers,
+        timestamp_us: u64,
     },
     KeyUp {
         code: String,
         modifiers: Modifiers,
+        timestamp_us: u64,
     },
     MouseMove {
         dx: i32,
         dy: i32,
         modifiers: Modifiers,
+        timestamp_us: u64,
     },
     MouseButtonDown {
         button: MouseButton,
         modifiers: Modifiers,
+        timestamp_us: u64,
     },
     MouseButtonUp {
         button: MouseButton,
         modifiers: Modifiers,
+        timestamp_us: u64,
     },
     MouseWheel {
         delta_x: i32,
         delta_y: i32,
         modifiers: Modifiers,
+        timestamp_us: u64,
     },
 }
 
@@ -71,6 +77,7 @@ mod tests {
         let event = InputEvent::MouseButtonDown {
             button: MouseButton::Left,
             modifiers: Modifiers::none(),
+            timestamp_us: 123456789,
         };
 
         let encoded = toml::to_string(&event).expect("event should serialize");

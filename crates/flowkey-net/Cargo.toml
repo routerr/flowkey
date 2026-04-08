@@ -10,7 +10,9 @@ mdns-sd.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+bincode.workspace = true
 tokio.workspace = true
+crossbeam-channel.workspace = true
 rand.workspace = true
 flowkey-config = { path = "../flowkey-config" }
 flowkey-crypto = { path = "../flowkey-crypto" }

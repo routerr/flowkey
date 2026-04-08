@@ -22,7 +22,9 @@ authors = ["Ray Chang"]
 [workspace.dependencies]
 anyhow = "1"
 base64 = "0.22"
+bincode = "1"
 clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"
 mdns-sd = "0.19"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }

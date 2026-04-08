@@ -95,25 +95,25 @@ impl NativeInputSink {
     fn handle_input_event(&mut self, event: &InputEvent) -> Result<(), String> {
         self.record_loopback(event);
         match event {
-            InputEvent::KeyDown { code, modifiers } => {
+            InputEvent::KeyDown { code, modifiers, .. } => {
                 let key_code = parse_key_code(code);
                 self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
                 self.key_action(key_code, Direction::Press)
             }
-            InputEvent::KeyUp { code, modifiers } => {
+            InputEvent::KeyUp { code, modifiers, .. } => {
                 let key_code = parse_key_code(code);
                 self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
                 self.key_action(key_code, Direction::Release)
             }
-            InputEvent::MouseMove { dx, dy, modifiers } => {
+            InputEvent::MouseMove { dx, dy, modifiers, .. } => {
                 self.sync_modifiers(modifiers, None)?;
                 self.move_mouse(*dx, *dy)
             }
-            InputEvent::MouseButtonDown { button, modifiers } => {
+            InputEvent::MouseButtonDown { button, modifiers, .. } => {
                 self.sync_modifiers(modifiers, None)?;
                 self.button_action(*button, Direction::Press)
             }
-            InputEvent::MouseButtonUp { button, modifiers } => {
+            InputEvent::MouseButtonUp { button, modifiers, .. } => {
                 self.sync_modifiers(modifiers, None)?;
                 self.button_action(*button, Direction::Release)
             }
@@ -121,6 +121,7 @@ impl NativeInputSink {
                 delta_x,
                 delta_y,
                 modifiers,
+                ..
             } => {
                 self.sync_modifiers(modifiers, None)?;
                 if *delta_y != 0 {
@@ -516,6 +517,7 @@ impl NativeInputSink {
                 self.record_loopback(&InputEvent::MouseButtonUp {
                     button,
                     modifiers: self.current_modifiers,
+                    timestamp_us: 0,
                 });
             }
             self.enigo
@@ -751,11 +753,13 @@ fn record_loopback_key_event(
         InputEvent::KeyDown {
             code: code.to_string(),
             modifiers,
+            timestamp_us: 0,
         }
     } else {
         InputEvent::KeyUp {
             code: code.to_string(),
             modifiers,
+            timestamp_us: 0,
         }
     };
 
@@ -914,7 +918,11 @@ fn key_release_event(key: Key, modifiers: Modifiers) -> Option<InputEvent> {
         _ => modifiers,
     };
 
-    Some(InputEvent::KeyUp { code, modifiers })
+    Some(InputEvent::KeyUp {
+        code,
+        modifiers,
+        timestamp_us: 0,
+    })
 }
 
 fn button_name(button: Button) -> Option<MouseButton> {

@@ -2,8 +2,9 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -21,6 +22,46 @@ impl DaemonCommand {
 
     pub fn release() -> Self {
         Self::Release
+    }
+
+    pub async fn send_to<S>(&self, stream: &mut S) -> Result<()>
+    where
+        S: AsyncWriteExt + Unpin,
+    {
+        let payload = bincode::serialize(self).context("failed to serialize daemon command")?;
+        let len = payload.len() as u32;
+        stream
+            .write_u32(len)
+            .await
+            .context("failed to write command length")?;
+        stream
+            .write_all(&payload)
+            .await
+            .context("failed to write command payload")?;
+        stream.flush().await.context("failed to flush stream")?;
+        Ok(())
+    }
+
+    pub async fn read_from<S>(stream: &mut S) -> Result<Self>
+    where
+        S: AsyncReadExt + Unpin,
+    {
+        let len = stream
+            .read_u32()
+            .await
+            .context("failed to read command length")?;
+        if len > 1024 * 64 {
+            return Err(anyhow!("command payload too large: {len} bytes"));
+        }
+
+        let mut payload = vec![0u8; len as usize];
+        stream
+            .read_exact(&mut payload)
+            .await
+            .context("failed to read command payload")?;
+
+        let command = bincode::deserialize(&payload).context("failed to deserialize command")?;
+        Ok(command)
     }
 
     pub fn load_from_path(path: &Path) -> Result<Self> {

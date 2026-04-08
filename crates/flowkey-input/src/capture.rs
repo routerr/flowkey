@@ -143,16 +143,24 @@ impl CaptureState {
 
     pub fn translate_event(&mut self, event: rdev::Event) -> Option<InputEvent> {
         let modifiers = self.modifiers;
+        let timestamp_us = event
+            .time
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
         match event.event_type {
-            rdev::EventType::KeyPress(key) => self.translate_key_event(key, true),
-            rdev::EventType::KeyRelease(key) => self.translate_key_event(key, false),
+            rdev::EventType::KeyPress(key) => self.translate_key_event(key, true, timestamp_us),
+            rdev::EventType::KeyRelease(key) => self.translate_key_event(key, false, timestamp_us),
             rdev::EventType::ButtonPress(button) => Some(InputEvent::MouseButtonDown {
                 button: normalize_button(button),
                 modifiers,
+                timestamp_us,
             }),
             rdev::EventType::ButtonRelease(button) => Some(InputEvent::MouseButtonUp {
                 button: normalize_button(button),
                 modifiers,
+                timestamp_us,
             }),
             rdev::EventType::MouseMove { x, y } => {
                 let last_position = self.last_mouse_position;
@@ -162,6 +170,7 @@ impl CaptureState {
                     dx: delta.0,
                     dy: delta.1,
                     modifiers,
+                    timestamp_us,
                 })
             }
             rdev::EventType::Wheel { delta_x, delta_y } => {
@@ -170,12 +179,18 @@ impl CaptureState {
                     delta_x,
                     delta_y,
                     modifiers,
+                    timestamp_us,
                 })
             }
         }
     }
 
-    pub fn translate_key_event(&mut self, key: rdev::Key, pressed: bool) -> Option<InputEvent> {
+    pub fn translate_key_event(
+        &mut self,
+        key: rdev::Key,
+        pressed: bool,
+        timestamp_us: u64,
+    ) -> Option<InputEvent> {
         let code = normalize_key_code(key)?;
         let mut modifiers = self.modifiers;
 
@@ -189,9 +204,17 @@ impl CaptureState {
 
         self.modifiers = modifiers;
         if pressed {
-            Some(InputEvent::KeyDown { code, modifiers })
+            Some(InputEvent::KeyDown {
+                code,
+                modifiers,
+                timestamp_us,
+            })
         } else {
-            Some(InputEvent::KeyUp { code, modifiers })
+            Some(InputEvent::KeyUp {
+                code,
+                modifiers,
+                timestamp_us,
+            })
         }
     }
 }
@@ -242,13 +265,15 @@ mod tests {
             time: std::time::SystemTime::now(),
             name: None,
         });
-        assert_eq!(
-            second,
-            Some(InputEvent::MouseMove {
-                dx: 4,
-                dy: -3,
-                modifiers: crate::event::Modifiers::none()
-            })
-        );
+        
+        match second {
+            Some(InputEvent::MouseMove { dx, dy, modifiers, timestamp_us }) => {
+                assert_eq!(dx, 4);
+                assert_eq!(dy, -3);
+                assert_eq!(modifiers, crate::event::Modifiers::none());
+                assert!(timestamp_us > 0);
+            }
+            _ => panic!("Expected MouseMove event, got {:?}", second),
+        }
     }
 }

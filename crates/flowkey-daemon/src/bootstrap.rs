@@ -24,6 +24,8 @@ use flowkey_net::connection::{
 use flowkey_net::discovery::DiscoveryAdvertisement;
 use flowkey_net::heartbeat::HeartbeatConfig;
 use tokio::net::TcpListener;
+#[cfg(target_os = "macos")]
+use tokio::net::UnixListener;
 use tokio::signal;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
@@ -545,39 +547,92 @@ fn spawn_control_watcher(
     status_path: PathBuf,
     suppression_state: Arc<AtomicBool>,
 ) {
-    thread::spawn(move || loop {
-        if !control_path.exists() {
-            thread::sleep(Duration::from_millis(150));
-            continue;
+    tokio::spawn(async move {
+        #[cfg(target_os = "macos")]
+        {
+            let socket_path = control_path.with_extension("sock");
+            if socket_path.exists() {
+                let _ = fs::remove_file(&socket_path);
+            }
+
+            loop {
+                match UnixListener::bind(&socket_path) {
+                    Ok(listener) => {
+                        info!(path = %socket_path.display(), "daemon control socket listening");
+                        loop {
+                            match listener.accept().await {
+                                Ok((mut stream, _)) => {
+                                    let runtime = Arc::clone(&runtime);
+                                    let session_senders = Arc::clone(&session_senders);
+                                    let status_path = status_path.clone();
+                                    let suppression_state = Arc::clone(&suppression_state);
+
+                                    tokio::spawn(async move {
+                                        match DaemonCommand::read_from(&mut stream).await {
+                                            Ok(command) => {
+                                                if let Err(error) = handle_control_command(
+                                                    command,
+                                                    &runtime,
+                                                    &session_senders,
+                                                    &status_path,
+                                                    &suppression_state,
+                                                ) {
+                                                    warn!(%error, "failed to handle daemon control command");
+                                                }
+                                            }
+                                            Err(error) => {
+                                                warn!(%error, "failed to read daemon control command from socket");
+                                            }
+                                        }
+                                    });
+                                }
+                                Err(error) => {
+                                    warn!(%error, "failed to accept control socket connection");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        error!(%error, path = %socket_path.display(), "failed to bind daemon control socket; retrying in 1s");
+                        sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
         }
 
-        let command = match DaemonCommand::load_from_path(&control_path) {
-            Ok(command) => command,
-            Err(error) => {
-                warn!(%error, path = %control_path.display(), "failed to load daemon control command");
-                let _ = fs::remove_file(&control_path);
-                thread::sleep(Duration::from_millis(150));
-                continue;
-            }
-        };
+        #[cfg(not(target_os = "macos"))]
+        {
+            loop {
+                if !control_path.exists() {
+                    sleep(Duration::from_millis(150)).await;
+                    continue;
+                }
 
-        match handle_control_command(
-            command,
-            &runtime,
-            &session_senders,
-            &status_path,
-            &suppression_state,
-        ) {
-            Ok(()) => {
+                let command = match DaemonCommand::load_from_path(&control_path) {
+                    Ok(command) => command,
+                    Err(error) => {
+                        warn!(%error, path = %control_path.display(), "failed to load daemon control command");
+                        let _ = fs::remove_file(&control_path);
+                        sleep(Duration::from_millis(150)).await;
+                        continue;
+                    }
+                };
+
+                if let Err(error) = handle_control_command(
+                    command,
+                    &runtime,
+                    &session_senders,
+                    &status_path,
+                    &suppression_state,
+                ) {
+                    warn!(%error, path = %control_path.display(), "daemon control command failed");
+                }
+
                 let _ = fs::remove_file(&control_path);
-            }
-            Err(error) => {
-                warn!(%error, path = %control_path.display(), "daemon control command failed");
-                let _ = fs::remove_file(&control_path);
+                sleep(Duration::from_millis(150)).await;
             }
         }
-
-        thread::sleep(Duration::from_millis(150));
     });
 }
 

@@ -70,7 +70,7 @@ impl HotkeyBinding {
     pub fn matches(&self, event: &InputEvent) -> bool {
         matches!(
             event,
-            InputEvent::KeyDown { code, modifiers }
+            InputEvent::KeyDown { code, modifiers, .. }
                 if self.code_matches(code) && *modifiers == self.modifiers
         )
     }
@@ -120,7 +120,7 @@ impl HotkeyTracker {
         }
 
         match event {
-            InputEvent::KeyDown { code, modifiers } => {
+            InputEvent::KeyDown { code, modifiers, .. } => {
                 if !self.latched
                     && self.binding.code_matches(code)
                     && *modifiers == self.binding.modifiers
@@ -177,6 +177,7 @@ mod tests {
                 alt: true,
                 meta: false,
             },
+            timestamp_us: 0,
         }));
     }
 
@@ -193,6 +194,7 @@ mod tests {
                 alt: true,
                 meta: false,
             },
+            timestamp_us: 0,
         };
         let release = InputEvent::KeyUp {
             code: "KeyK".to_string(),
@@ -202,6 +204,7 @@ mod tests {
                 alt: false,
                 meta: false,
             },
+            timestamp_us: 0,
         };
         let release_shift = InputEvent::KeyUp {
             code: "ShiftLeft".to_string(),
@@ -211,6 +214,7 @@ mod tests {
                 alt: true,
                 meta: false,
             },
+            timestamp_us: 0,
         };
         let release_control = InputEvent::KeyUp {
             code: "ControlLeft".to_string(),
@@ -220,6 +224,7 @@ mod tests {
                 alt: true,
                 meta: false,
             },
+            timestamp_us: 0,
         };
         let release_alt = InputEvent::KeyUp {
             code: "AltLeft".to_string(),
@@ -229,6 +234,7 @@ mod tests {
                 alt: false,
                 meta: false,
             },
+            timestamp_us: 0,
         };
 
         assert!(matches!(tracker.process(&press), HotkeyOutcome::Pressed));
@@ -265,6 +271,7 @@ mod tests {
                 alt: true,
                 meta: false,
             },
+            timestamp_us: 0,
         };
         let release_key = InputEvent::KeyUp {
             code: "KeyK".to_string(),
@@ -274,6 +281,7 @@ mod tests {
                 alt: true,
                 meta: false,
             },
+            timestamp_us: 0,
         };
         let release_shift = InputEvent::KeyUp {
             code: "ShiftLeft".to_string(),
@@ -283,6 +291,7 @@ mod tests {
                 alt: true,
                 meta: false,
             },
+            timestamp_us: 0,
         };
 
         assert!(matches!(

@@ -11,7 +11,7 @@ pub struct FrameHeader {
 }
 
 pub async fn write_message(stream: &mut TcpStream, message: &Message) -> Result<()> {
-    let payload = serde_json::to_vec(message).context("failed to serialize message")?;
+    let payload = bincode::serialize(message).context("failed to serialize message")?;
     let header = FrameHeader {
         payload_len: payload
             .len()
@@ -51,8 +51,7 @@ pub async fn read_message(stream: &mut TcpStream) -> Result<Message> {
         .await
         .context("failed to read message payload")?;
 
-    let message =
-        serde_json::from_slice::<Message>(&payload).context("failed to decode message")?;
+    let message = bincode::deserialize::<Message>(&payload).context("failed to decode message")?;
     let expected_type = message_type_for_decoded_message(&message);
 
     if message_type != expected_type {

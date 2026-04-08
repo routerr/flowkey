@@ -63,6 +63,7 @@ mod tests {
                     alt: true,
                     meta: false,
                 },
+                timestamp_us: 0,
             },
         };
 

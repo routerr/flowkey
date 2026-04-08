@@ -7,6 +7,8 @@ use flowkey_daemon::run_daemon;
 use std::path::Path;
 use std::time::Duration;
 use tokio::net::TcpListener;
+#[cfg(target_os = "macos")]
+use tokio::net::UnixStream;
 use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
@@ -169,18 +171,61 @@ async fn main() -> Result<()> {
         }
         Command::Switch { peer_id } => {
             let control_path = Config::control_path()?;
-            DaemonCommand::switch(&peer_id).save_to_path(&control_path)?;
-            info!(%peer_id, path = %control_path.display(), "queued switch request");
-            println!("switch request queued");
-            println!("peer: {peer_id}");
-            println!("control file: {}", control_path.display());
+            let socket_path = control_path.with_extension("sock");
+            let mut sent_via_socket = false;
+
+            #[cfg(target_os = "macos")]
+            {
+                if socket_path.exists() {
+                    match UnixStream::connect(&socket_path).await {
+                        Ok(mut stream) => {
+                            if let Ok(()) = DaemonCommand::switch(&peer_id).send_to(&mut stream).await {
+                                info!(%peer_id, path = %socket_path.display(), "sent switch request to daemon socket");
+                                println!("switch request sent to daemon");
+                                sent_via_socket = true;
+                            }
+                        }
+                        Err(_) => {
+                            // Daemon might not be running or socket is stale
+                        }
+                    }
+                }
+            }
+
+            if !sent_via_socket {
+                DaemonCommand::switch(&peer_id).save_to_path(&control_path)?;
+                info!(%peer_id, path = %control_path.display(), "queued switch request via file");
+                println!("switch request queued (daemon may be legacy or starting up)");
+            }
         }
         Command::Release => {
             let control_path = Config::control_path()?;
-            DaemonCommand::release().save_to_path(&control_path)?;
-            info!(path = %control_path.display(), "queued release request");
-            println!("release request queued");
-            println!("control file: {}", control_path.display());
+            let socket_path = control_path.with_extension("sock");
+            let mut sent_via_socket = false;
+
+            #[cfg(target_os = "macos")]
+            {
+                if socket_path.exists() {
+                    match UnixStream::connect(&socket_path).await {
+                        Ok(mut stream) => {
+                            if let Ok(()) = DaemonCommand::release().send_to(&mut stream).await {
+                                info!(path = %socket_path.display(), "sent release request to daemon socket");
+                                println!("release request sent to daemon");
+                                sent_via_socket = true;
+                            }
+                        }
+                        Err(_) => {
+                            // Daemon might not be running or socket is stale
+                        }
+                    }
+                }
+            }
+
+            if !sent_via_socket {
+                DaemonCommand::release().save_to_path(&control_path)?;
+                info!(path = %control_path.display(), "queued release request via file");
+                println!("release request queued (daemon may be legacy or starting up)");
+            }
         }
         Command::Status => {
             let config = Config::load_or_default()?;
