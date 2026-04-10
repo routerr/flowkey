@@ -189,7 +189,7 @@ fn main() {
       let _app_handle = app.handle();
       
       // Start daemon in background
-      tokio::spawn(async move {
+      tauri::async_runtime::spawn(async move {
         if let Ok(config) = Config::load_or_create() {
           let _ = flowkey_daemon::run_daemon(config).await;
         }
@@ -197,7 +197,7 @@ fn main() {
 
       // Periodically emit daemon status to frontend
       let status_handle = app.handle();
-      tokio::spawn(async move {
+      tauri::async_runtime::spawn(async move {
         let status_path = Config::status_path().unwrap();
         loop {
           if status_path.exists() {
