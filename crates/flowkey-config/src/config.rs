@@ -259,6 +259,11 @@ impl Config {
         Ok(control_path_for_config_path(&config_path))
     }
 
+    pub fn log_dir() -> Result<PathBuf> {
+        let config_path = Self::default_path()?;
+        Ok(log_dir_for_config_path(&config_path))
+    }
+
     pub fn advertised_listen_addr(&self) -> Result<String> {
         if let Some(override_addr) = self.node.advertised_addr.as_deref() {
             advertised_listen_addr_with_override(&self.node.listen_addr, Some(override_addr))
@@ -380,6 +385,13 @@ pub fn control_path_for_config_path(config_path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("control.toml"))
 }
 
+pub fn log_dir_for_config_path(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .map(|parent| parent.join("logs"))
+        .unwrap_or_else(|| PathBuf::from("logs"))
+}
+
 pub fn advertised_listen_addr(listen_addr: &str) -> Result<String> {
     advertised_listen_addr_with_override(listen_addr, None)
 }
@@ -440,7 +452,8 @@ mod tests {
 
     use super::{
         advertised_listen_addr, advertised_listen_addr_with_override, control_path_for_config_path,
-        normalize_id, status_path_for_config_path, CaptureMode, Config, PeerConfig,
+        log_dir_for_config_path, normalize_id, status_path_for_config_path, CaptureMode, Config,
+        PeerConfig,
     };
 
     #[test]

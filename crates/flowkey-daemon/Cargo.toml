@@ -8,6 +8,7 @@ license.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
 flowkey-config = { path = "../flowkey-config" }
 flowkey-core = { path = "../flowkey-core" }
 flowkey-input = { path = "../flowkey-input" }

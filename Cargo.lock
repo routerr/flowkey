@@ -1433,6 +1433,7 @@ dependencies = [
  "flowkey-platform-macos",
  "flowkey-platform-windows",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -5186,6 +5187,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

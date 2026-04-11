@@ -4,18 +4,21 @@
 )]
 
 use flowkey_config::Config;
+use flowkey_daemon::{spawn_supervised, DaemonHandle};
 use flowkey_net::discovery::{DiscoveredPeer, DiscoveryAdvertisement};
 use flowkey_net::pairing::{initiate_pairing_client, run_pairing_listener, PairingProposal};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{
-    CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem,
+    CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
+    SystemTrayMenuItem, WindowEvent,
 };
 use tokio::net::TcpListener;
 
 struct AppState {
     active_pairing: Arc<Mutex<Option<PairingProposal>>>,
     active_discovery: Arc<Mutex<Option<DiscoveryAdvertisement>>>,
+    daemon: Arc<Mutex<Option<Arc<DaemonHandle>>>>,
 }
 
 #[tauri::command]
@@ -166,6 +169,23 @@ async fn release_control() -> Result<(), String> {
     cmd.save_to_path(&control_path).map_err(|e| e.to_string())
 }
 
+fn request_daemon_shutdown(app: tauri::AppHandle) {
+    let handle = app
+        .state::<AppState>()
+        .daemon
+        .lock()
+        .unwrap()
+        .as_ref()
+        .cloned();
+
+    tauri::async_runtime::spawn(async move {
+        if let Some(handle) = handle {
+            handle.shutdown().await;
+        }
+        app.exit(0);
+    });
+}
+
 fn main() {
     // Set up panic hook for debugging
     std::panic::set_hook(Box::new(|info| {
@@ -182,13 +202,10 @@ fn main() {
             .unwrap_or_default();
         let panic_msg = format!("Panic occurred at {}: {}\n", location, msg);
 
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(home) = std::env::var("HOME") {
-                let log_path =
-                    std::path::PathBuf::from(home).join("Library/Logs/flowkey-panic.log");
-                let _ = std::fs::write(log_path, &panic_msg);
-            }
+        if let Ok(log_dir) = Config::log_dir() {
+            let _ = std::fs::create_dir_all(&log_dir);
+            let log_path = log_dir.join("flowkey-panic.log");
+            let _ = std::fs::write(log_path, &panic_msg);
         }
 
         eprintln!("{}", panic_msg);
@@ -207,12 +224,19 @@ fn main() {
         .manage(AppState {
             active_pairing: Arc::new(Mutex::new(None)),
             active_discovery: Arc::new(Mutex::new(None)),
+            daemon: Arc::new(Mutex::new(None)),
         })
         .system_tray(system_tray)
+        .on_window_event(|event| {
+            if let WindowEvent::CloseRequested { api, .. } = event.event() {
+                api.prevent_close();
+                request_daemon_shutdown(event.window().app_handle().clone());
+            }
+        })
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
                 "quit" => {
-                    std::process::exit(0);
+                    request_daemon_shutdown(app.clone());
                 }
                 "open" => {
                     let window = app.get_window("main").unwrap();
@@ -224,16 +248,17 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
-            let _app_handle = app.handle();
+            if let Ok(config) = Config::load_or_create() {
+                let handle = Arc::new(spawn_supervised(config));
+                let state = app.state::<AppState>();
+                let mut daemon = state.daemon.lock().unwrap();
+                *daemon = Some(handle);
+            }
 
-            // Start daemon in background
-            tauri::async_runtime::spawn(async move {
-                if let Ok(config) = Config::load_or_create() {
-                    let _ = flowkey_daemon::run_daemon(config).await;
-                }
-            });
+            if let Ok(log_dir) = Config::log_dir() {
+                let _ = std::fs::create_dir_all(log_dir);
+            }
 
-            // Periodically emit daemon status to frontend
             let status_handle = app.handle();
             tauri::async_runtime::spawn(async move {
                 let status_path = Config::status_path().unwrap();

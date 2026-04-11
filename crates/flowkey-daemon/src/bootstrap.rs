@@ -28,9 +28,17 @@ use tokio::net::TcpListener;
 use tokio::net::UnixListener;
 use tokio::signal;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 pub async fn run_daemon(config: Config) -> Result<()> {
+    run_daemon_with_shutdown(config, CancellationToken::new()).await
+}
+
+pub(crate) async fn run_daemon_with_shutdown(
+    config: Config,
+    shutdown: CancellationToken,
+) -> Result<()> {
     let listen_addr: SocketAddr = config
         .node
         .listen_addr
@@ -357,6 +365,9 @@ pub async fn run_daemon(config: Config) -> Result<()> {
     tokio::select! {
         _ = signal::ctrl_c() => {
             info!("shutdown requested via Ctrl+C");
+        }
+        _ = shutdown.cancelled() => {
+            info!("shutdown requested");
         }
     }
 
