@@ -513,4 +513,140 @@ mod tests {
 
         fs::remove_file(&status_path).ok();
     }
+
+    #[test]
+    fn release_from_controlled_by_notifies_controller_and_clears_suppression() {
+        // Verifies the cross-node release path: when the controlled side issues a
+        // Release command its daemon must send SwitchRelease to the controller so
+        // the controller can exit Controlling, and local suppression must be cleared.
+        let runtime = Arc::new(Mutex::new(DaemonRuntime::new()));
+        let session_senders = Arc::new(Mutex::new(HashMap::<String, SessionSender>::new()));
+        let suppression_state = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let status_path = temp_status_path("release-controlled-by");
+        let status_snapshot = Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(
+            &runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned"),
+        )));
+
+        let (controller_sender, controller_receiver) = session_channel();
+        let controller_peer = "office-pc";
+
+        {
+            let mut runtime = runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned");
+            runtime.mark_authenticated(controller_peer);
+            runtime
+                .mark_controlled_by(controller_peer)
+                .expect("should enter controlled-by");
+        }
+        session_senders
+            .lock()
+            .expect("session sender registry should not be poisoned")
+            .insert(controller_peer.to_string(), controller_sender);
+
+        handle_control_command(
+            DaemonCommand::release(),
+            &runtime,
+            &status_snapshot,
+            &session_senders,
+            &status_path,
+            &suppression_state,
+        )
+        .expect("release command should succeed from controlled-by state");
+
+        // Controller peer should receive SwitchRelease so it exits Controlling.
+        assert!(
+            matches!(
+                controller_receiver
+                    .recv()
+                    .expect("controller should receive release notification"),
+                SessionCommand::ReleaseControl { .. }
+            ),
+            "controller should receive ReleaseControl"
+        );
+        assert!(
+            matches!(
+                controller_receiver
+                    .recv()
+                    .expect("controller should receive flush"),
+                SessionCommand::ReleaseAll
+            ),
+            "controller should receive ReleaseAll flush"
+        );
+
+        // Local state must return to ConnectedIdle.
+        let runtime = runtime
+            .lock()
+            .expect("daemon runtime mutex should not be poisoned");
+        assert_eq!(
+            runtime.state,
+            DaemonState::ConnectedIdle,
+            "local state should be ConnectedIdle after release"
+        );
+
+        // Suppression must be cleared so the local machine regains input.
+        assert!(
+            !suppression_state.load(std::sync::atomic::Ordering::SeqCst),
+            "suppression_state should be false after release"
+        );
+
+        fs::remove_file(&status_path).ok();
+    }
+
+    #[test]
+    fn switch_command_enables_suppression_state() {
+        // Verifies that taking control via the IPC Switch command flips
+        // suppression_state to true so the platform capture layer can suppress
+        // local input while forwarding to the remote.
+        let runtime = Arc::new(Mutex::new(DaemonRuntime::new()));
+        let session_senders = Arc::new(Mutex::new(HashMap::<String, SessionSender>::new()));
+        let suppression_state = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let status_path = temp_status_path("switch-suppression");
+        let status_snapshot = Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(
+            &runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned"),
+        )));
+
+        let (sender, _receiver) = session_channel();
+        let peer_id = "office-pc";
+
+        {
+            let mut runtime = runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned");
+            runtime.mark_authenticated(peer_id);
+        }
+        session_senders
+            .lock()
+            .expect("session sender registry should not be poisoned")
+            .insert(peer_id.to_string(), sender);
+
+        handle_control_command(
+            DaemonCommand::switch(peer_id),
+            &runtime,
+            &status_snapshot,
+            &session_senders,
+            &status_path,
+            &suppression_state,
+        )
+        .expect("switch command should succeed");
+
+        assert!(
+            suppression_state.load(std::sync::atomic::Ordering::SeqCst),
+            "suppression_state should be true after switching into Controlling"
+        );
+
+        let runtime = runtime
+            .lock()
+            .expect("daemon runtime mutex should not be poisoned");
+        assert!(
+            matches!(runtime.state, DaemonState::Controlling { .. }),
+            "daemon should be in Controlling state"
+        );
+
+        fs::remove_file(&status_path).ok();
+    }
 }

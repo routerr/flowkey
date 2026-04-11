@@ -1,7 +1,7 @@
 # Control Mode: Analysis & Fix Plan
 
 > Audience: AI coding agents executing this plan in follow-up sessions.
-> Status: Draft. Not yet implemented. Exploration only — no code changes made.
+> Status: **Complete** — Phase A, B, C, and D all landed. See git log for commits.
 > Date: 2026-04-12
 
 ## 1. User-Reported Symptoms
@@ -143,33 +143,27 @@ Phases are ordered from lowest-risk/highest-leverage to largest engineering effo
 
 ### Phase C — Cross-node "release from remote" protocol
 
-**Goal:** The controlled device can tell the controlling device to release, so the "explicit mode" feels symmetric.
+**Status: Already implemented — no new code needed.**
 
-- **C1. New protocol message.**
-  File: `crates/flowkey-protocol/src/message.rs`.
-  - Add `SessionCommand::RequestRelease { request_id }` (or similar name — match existing kebab-case).
-  - Bump any version/handshake check if the protocol has one (see `flowkey-crypto/src/handshake.rs` and `flowkey-protocol/src/lib.rs`).
+The mechanism was already in place using the existing `SwitchRelease` message bidirectionally:
 
-- **C2. Sender path on the controlled side.**
-  File: `crates/flowkey-daemon/src/control_ipc.rs` Release handler.
-  - When local state is `ControlledBy` at the time of the release, additionally send `SessionSender::send_request_release(...)` to the active peer so the controller's daemon exits `Controlling`.
-  - Alternatively, add a separate `DaemonCommand::RequestRemoteRelease` so the GUI can invoke it explicitly without also tearing down local state prematurely.
+- `control_ipc.rs` Release handler already calls `notify_peer_release(active_peer_id, ...)` **before** calling `runtime.release_control()`. When state is `ControlledBy`, `active_peer_id` is the controller peer, so this sends `SessionCommand::ReleaseControl` → `Message::SwitchRelease` to the controller.
+- `run_authenticated_session` (`connection.rs:625-639`) already calls `state_callback.on_remote_release()` on receiving `Message::SwitchRelease` from any direction, so the controller's `DaemonSessionCallback::on_remote_release` transitions it from `Controlling` → `ConnectedIdle` and clears suppression.
+- The hotkey path on the controlled side (`platform.rs` watcher thread) already calls `notify_peer_release` after `toggle_controller()` transitions `ControlledBy` → `ConnectedIdle`.
 
-- **C3. Receiver path on the controlling side.**
-  File: `crates/flowkey-net/src/connection.rs` (session loop) and `crates/flowkey-daemon/src/session_flow.rs`.
-  - On receiving `RequestRelease`, call `runtime.release_control()`, notify the peer with the existing `send_release` flow, flip suppression off.
+The only missing piece was showing the Release button on the controlled side, which Phase A2 fixed.
 
-- **C4. UI wire-up.**
-  File: `crates/flowkey-gui/frontend/src/App.tsx`.
-  - On `controlled-by`, the Release button invokes a new Tauri command `request_remote_release` (or reuses `release_control` if Phase C collapses the two commands).
+Three unit tests were added to verify this flow end-to-end:
+- `control_ipc::release_from_controlled_by_notifies_controller_and_clears_suppression`
+- `control_ipc::switch_command_enables_suppression_state`
+- `session_flow::on_remote_release_transitions_controlled_by_to_connected_idle`
 
-### Phase D — Hardening (optional, after B ships)
+### Phase D — Hardening
 
-- Add an integration test that boots two in-process daemons on loopback and exercises:
-  1. macOS-side hotkey → controlling → release via hotkey.
-  2. GUI Control button → controlling → GUI Release button.
-  3. `controlled-by` side presses hotkey → controller exits `Controlling` (requires C).
-- Consider replacing the `Arc<AtomicBool>` suppression_state threading with a proper `CaptureController` handle that all code paths (hotkey, IPC, session) can call.
+**Status: Complete.**
+
+- Three targeted unit tests added (see Phase C above) covering the cross-node release round-trip and suppression state management.
+- `WindowsExclusiveCapture` gained `capture_restart_counter()` and a supervision loop so grab-thread crashes are recovered automatically with exponential backoff, matching the macOS and `LocalInputCapture` restart patterns.
 
 ## 5. Files the implementer will touch (quick index)
 

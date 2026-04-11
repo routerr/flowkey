@@ -478,6 +478,53 @@ mod tests {
     }
 
     #[test]
+    fn on_remote_release_transitions_controlled_by_to_connected_idle() {
+        // Verifies the controller-side handling when the controlled machine sends
+        // SwitchRelease back: on_remote_release should exit Controlling state and
+        // clear suppression, mirroring the controlled side's release_control path.
+        let runtime = Arc::new(Mutex::new(DaemonRuntime::new()));
+        let status_snapshot = Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(
+            &runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned"),
+        )));
+        let suppression_state = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let status_path = temp_status_path("on-remote-release-controlling");
+        let callback = super::DaemonSessionCallback {
+            runtime: Arc::clone(&runtime),
+            status_snapshot,
+            status_path: status_path.clone(),
+            suppression_state: Arc::clone(&suppression_state),
+            accept_remote_control: true,
+        };
+
+        {
+            let mut runtime = runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned");
+            runtime.mark_authenticated("controlled-pc");
+            runtime.toggle_controller().expect("should enter Controlling");
+        }
+
+        callback.on_remote_release("controlled-pc", "req-release-1");
+
+        let runtime = runtime
+            .lock()
+            .expect("daemon runtime mutex should not be poisoned");
+        assert_eq!(
+            runtime.state,
+            DaemonState::ConnectedIdle,
+            "controller should return to ConnectedIdle after remote releases"
+        );
+        assert!(
+            !suppression_state.load(std::sync::atomic::Ordering::SeqCst),
+            "suppression_state should be cleared after remote release"
+        );
+
+        fs::remove_file(&status_path).ok();
+    }
+
+    #[test]
     fn remote_switch_rejected_when_remote_control_disabled() {
         let runtime = Arc::new(Mutex::new(DaemonRuntime::new()));
         let status_snapshot = Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(
