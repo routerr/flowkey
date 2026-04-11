@@ -1,18 +1,19 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
 use flowkey_config::Config;
-use tokio::task::JoinHandle;
+use tokio::runtime::Builder;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
 pub struct DaemonHandle {
     shutdown: CancellationToken,
-    join_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    thread_handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
     running: Arc<AtomicBool>,
     restart_count: Arc<AtomicUsize>,
 }
@@ -21,10 +22,15 @@ impl DaemonHandle {
     pub async fn shutdown(&self) {
         self.shutdown.cancel();
 
-        let join_handle = self.join_handle.lock().expect("daemon handle mutex").take();
-        if let Some(join_handle) = join_handle {
-            let _ = join_handle.await;
-        }
+        // The supervisor owns its own Tokio runtime on a dedicated thread.
+        // Cancelling the token above signals it to wind down; we detach the
+        // thread here rather than joining it so we do not depend on whichever
+        // runtime the caller happens to be running under.
+        let _ = self
+            .thread_handle
+            .lock()
+            .expect("daemon handle mutex")
+            .take();
 
         self.running.store(false, Ordering::SeqCst);
     }
@@ -57,73 +63,108 @@ where
     let supervisor_running = Arc::clone(&running);
     let supervisor_restarts = Arc::clone(&restart_count);
 
-    let join_handle = tokio::spawn(async move {
-        let backoff = [1_u64, 2, 5, 10];
-        let mut backoff_index = 0usize;
-
-        loop {
-            if supervisor_shutdown.is_cancelled() {
-                break;
-            }
-
-            let child_shutdown = supervisor_shutdown.child_token();
-            let runner = Arc::clone(&runner);
-            let config = config.clone();
-            let run_handle = tokio::spawn(async move { runner(config, child_shutdown).await });
-
-            match run_handle.await {
-                Ok(Ok(())) => {
-                    if supervisor_shutdown.is_cancelled() {
-                        break;
-                    }
-                    let restart_no = supervisor_restarts.fetch_add(1, Ordering::SeqCst) + 1;
-                    warn!(
-                        restart = restart_no,
-                        "daemon stopped unexpectedly; restarting"
-                    );
+    // Run the supervisor loop on a dedicated OS thread with its own
+    // multi-threaded Tokio runtime. The GUI caller may be running under
+    // Tauri's async executor which is not guaranteed to be Tokio, so we
+    // cannot rely on `tokio::spawn` working at call time.
+    let thread_handle = thread::Builder::new()
+        .name("flowkey-daemon-supervisor".into())
+        .spawn(move || {
+            let runtime = match Builder::new_multi_thread().enable_all().build() {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    error!(%error, "failed to build daemon tokio runtime");
+                    supervisor_running.store(false, Ordering::SeqCst);
+                    return;
                 }
-                Ok(Err(error)) => {
-                    if supervisor_shutdown.is_cancelled() {
-                        break;
-                    }
-                    let restart_no = supervisor_restarts.fetch_add(1, Ordering::SeqCst) + 1;
-                    warn!(restart = restart_no, %error, "daemon exited with error; restarting");
-                }
-                Err(join_error) => {
-                    if supervisor_shutdown.is_cancelled() {
-                        break;
-                    }
-                    let restart_no = supervisor_restarts.fetch_add(1, Ordering::SeqCst) + 1;
-                    if join_error.is_panic() {
-                        error!(restart = restart_no, "daemon panicked; restarting");
-                    } else {
-                        warn!(restart = restart_no, %join_error, "daemon task failed; restarting");
-                    }
-                }
-            }
+            };
 
-            if supervisor_shutdown.is_cancelled() {
-                break;
-            }
+            runtime.block_on(supervisor_loop(
+                runner,
+                config,
+                supervisor_shutdown,
+                supervisor_running.clone(),
+                supervisor_restarts,
+            ));
 
-            let delay = Duration::from_secs(backoff[backoff_index]);
-            if backoff_index + 1 < backoff.len() {
-                backoff_index += 1;
-            }
-            tokio::select! {
-                _ = sleep(delay) => {}
-                _ = supervisor_shutdown.cancelled() => break,
-            }
-        }
-
-        supervisor_running.store(false, Ordering::SeqCst);
-    });
+            supervisor_running.store(false, Ordering::SeqCst);
+        })
+        .expect("failed to spawn daemon supervisor thread");
 
     DaemonHandle {
         shutdown,
-        join_handle: Arc::new(Mutex::new(Some(join_handle))),
+        thread_handle: Arc::new(Mutex::new(Some(thread_handle))),
         running,
         restart_count,
+    }
+}
+
+async fn supervisor_loop<F, Fut>(
+    runner: Arc<F>,
+    config: Config,
+    supervisor_shutdown: CancellationToken,
+    _supervisor_running: Arc<AtomicBool>,
+    supervisor_restarts: Arc<AtomicUsize>,
+) where
+    F: Fn(Config, CancellationToken) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    let backoff = [1_u64, 2, 5, 10];
+    let mut backoff_index = 0usize;
+
+    loop {
+        if supervisor_shutdown.is_cancelled() {
+            break;
+        }
+
+        let child_shutdown = supervisor_shutdown.child_token();
+        let runner = Arc::clone(&runner);
+        let config = config.clone();
+        let run_handle = tokio::spawn(async move { runner(config, child_shutdown).await });
+
+        match run_handle.await {
+            Ok(Ok(())) => {
+                if supervisor_shutdown.is_cancelled() {
+                    break;
+                }
+                let restart_no = supervisor_restarts.fetch_add(1, Ordering::SeqCst) + 1;
+                warn!(
+                    restart = restart_no,
+                    "daemon stopped unexpectedly; restarting"
+                );
+            }
+            Ok(Err(error)) => {
+                if supervisor_shutdown.is_cancelled() {
+                    break;
+                }
+                let restart_no = supervisor_restarts.fetch_add(1, Ordering::SeqCst) + 1;
+                warn!(restart = restart_no, %error, "daemon exited with error; restarting");
+            }
+            Err(join_error) => {
+                if supervisor_shutdown.is_cancelled() {
+                    break;
+                }
+                let restart_no = supervisor_restarts.fetch_add(1, Ordering::SeqCst) + 1;
+                if join_error.is_panic() {
+                    error!(restart = restart_no, "daemon panicked; restarting");
+                } else {
+                    warn!(restart = restart_no, %join_error, "daemon task failed; restarting");
+                }
+            }
+        }
+
+        if supervisor_shutdown.is_cancelled() {
+            break;
+        }
+
+        let delay = Duration::from_secs(backoff[backoff_index]);
+        if backoff_index + 1 < backoff.len() {
+            backoff_index += 1;
+        }
+        tokio::select! {
+            _ = sleep(delay) => {}
+            _ = supervisor_shutdown.cancelled() => break,
+        }
     }
 }
 
