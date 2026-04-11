@@ -183,15 +183,32 @@ async fn switch_to_peer(peer_id: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let socket_path = control_path.with_extension("sock");
-        if socket_path.exists() {
-            if let Ok(mut stream) = tokio::net::UnixStream::connect(&socket_path).await {
-                if cmd.send_to(&mut stream).await.is_ok() {
-                    return Ok(());
-                }
-            }
+        if !socket_path.exists() {
+            return Err("daemon control socket not found; daemon may still be starting".to_string());
         }
+        let mut stream = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .map_err(|e| format!("failed to connect to daemon: {e}"))?;
+        cmd.send_to(&mut stream)
+            .await
+            .map_err(|e| format!("failed to send command to daemon: {e}"))?;
+        return Ok(());
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        let config = Config::load_or_default().map_err(|e| e.to_string())?;
+        let pipe_name = config.control_pipe_name();
+        let mut pipe = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .map_err(|e| format!("failed to connect to daemon pipe: {e}"))?;
+        cmd.send_to(&mut pipe)
+            .await
+            .map_err(|e| format!("failed to send command to daemon: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     cmd.save_to_path(&control_path).map_err(|e| e.to_string())
 }
 
@@ -203,15 +220,32 @@ async fn release_control() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let socket_path = control_path.with_extension("sock");
-        if socket_path.exists() {
-            if let Ok(mut stream) = tokio::net::UnixStream::connect(&socket_path).await {
-                if cmd.send_to(&mut stream).await.is_ok() {
-                    return Ok(());
-                }
-            }
+        if !socket_path.exists() {
+            return Err("daemon control socket not found; daemon may still be starting".to_string());
         }
+        let mut stream = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .map_err(|e| format!("failed to connect to daemon: {e}"))?;
+        cmd.send_to(&mut stream)
+            .await
+            .map_err(|e| format!("failed to send command to daemon: {e}"))?;
+        return Ok(());
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        let config = Config::load_or_default().map_err(|e| e.to_string())?;
+        let pipe_name = config.control_pipe_name();
+        let mut pipe = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .map_err(|e| format!("failed to connect to daemon pipe: {e}"))?;
+        cmd.send_to(&mut pipe)
+            .await
+            .map_err(|e| format!("failed to send command to daemon: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     cmd.save_to_path(&control_path).map_err(|e| e.to_string())
 }
 

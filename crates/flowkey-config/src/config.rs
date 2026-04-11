@@ -306,7 +306,7 @@ impl Config {
             },
             switch: SwitchConfig {
                 hotkey: "Ctrl+Alt+Shift+K".to_string(),
-                capture_mode: CaptureMode::Passive,
+                capture_mode: CaptureMode::Exclusive,
             },
             peers: Vec::new(),
         }
@@ -327,7 +327,7 @@ impl Default for Config {
             },
             switch: SwitchConfig {
                 hotkey: "Ctrl+Alt+Shift+K".to_string(),
-                capture_mode: CaptureMode::Passive,
+                capture_mode: CaptureMode::Exclusive,
             },
             peers: Vec::new(),
         }
@@ -476,7 +476,7 @@ mod tests {
 
         assert_eq!(decoded.node.id, "local-node");
         assert_eq!(decoded.switch.hotkey, "Ctrl+Alt+Shift+K");
-        assert_eq!(decoded.switch.capture_mode, CaptureMode::Passive);
+        assert_eq!(decoded.switch.capture_mode, CaptureMode::Exclusive);
         assert!(decoded.node.accept_remote_control);
         assert_eq!(
             decoded.node.private_key,

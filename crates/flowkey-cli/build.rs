@@ -9,8 +9,9 @@ fn main() {
             .join("app.manifest");
 
         println!("cargo:rustc-link-arg-bin=flky=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg-bin=flky=/MANIFESTUAC:NO");
         println!(
-            "cargo:rustc-link-arg-bin=flky=/MANIFESTINPUT:\"{}\"",
+            "cargo:rustc-link-arg-bin=flky=/MANIFESTINPUT:{}",
             manifest.display()
         );
     }

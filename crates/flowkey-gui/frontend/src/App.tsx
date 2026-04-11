@@ -244,9 +244,13 @@ function App() {
         ) : (
           <div className="dashboard">
             <section className="peers-section">
-              {status?.state.startsWith('controlling') && (
+              {(status?.state === 'controlling' || status?.state === 'controlled-by') && (
                 <div className="active-control-banner">
-                  <span>Currently controlling <strong>{status.active_peer_id}</strong></span>
+                  {status.state === 'controlling' ? (
+                    <span>Controlling <strong>{status.active_peer_id}</strong> — local input goes to remote only</span>
+                  ) : (
+                    <span>Controlled by <strong>{status.active_peer_id}</strong></span>
+                  )}
                   <button onClick={releaseControl} className="btn-small btn-error">Release Control</button>
                 </div>
               )}

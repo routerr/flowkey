@@ -50,10 +50,7 @@ pub(crate) async fn run_daemon_with_shutdown(
     {
         let permissions = flowkey_platform_windows::permissions::PermissionStatus::probe();
         if !permissions.user_session {
-            error!("flowkey daemon must run inside an interactive desktop session; aborting");
-            return Err(anyhow::anyhow!(
-                "flowkey daemon must run inside an interactive desktop session"
-            ));
+            warn!("flowkey daemon is running outside an interactive desktop session; input capture/injection may fail");
         }
     }
 

@@ -494,7 +494,7 @@ mod tests {
             vec![
                 "node: macbook-air".to_string(),
                 "listen: 0.0.0.0:48571".to_string(),
-                "capture mode: passive".to_string(),
+                "capture mode: exclusive".to_string(),
                 "state: connected-idle".to_string(),
                 "peer: office-pc".to_string(),
                 "trusted: yes".to_string(),
@@ -517,7 +517,7 @@ mod tests {
             vec![
                 "node: Local Node".to_string(),
                 "listen: 0.0.0.0:48571".to_string(),
-                "capture mode: passive".to_string(),
+                "capture mode: exclusive".to_string(),
                 "state: daemon-stopped".to_string(),
                 "peer: -".to_string(),
                 "trusted: no".to_string(),
