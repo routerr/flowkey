@@ -9,6 +9,20 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_ROOT"
 
+BUILD_TMP_DIR=""
+CARGO_TARGET_DIR=""
+
+cleanup_temp_dirs() {
+    if [ -n "${BUILD_TMP_DIR:-}" ] && [ -d "$BUILD_TMP_DIR" ]; then
+        rm -rf "$BUILD_TMP_DIR" 2>/dev/null || true
+    fi
+    if [ "${PLATFORM:-}" = "windows" ] && [ -n "${CARGO_TARGET_DIR:-}" ] && [ -d "$CARGO_TARGET_DIR" ]; then
+        rm -rf "$CARGO_TARGET_DIR" 2>/dev/null || true
+    fi
+}
+
+trap cleanup_temp_dirs EXIT
+
 echo "--- Building Flowkey ---"
 
 # Detect OS
@@ -32,6 +46,17 @@ if [ "$PLATFORM" == "windows" ]; then
     
     # Use a fresh temp target dir per run to avoid stale MSI/NSIS artifacts causing
     # permission-denied cleanup failures under MSYS2/UCRT64.
+    BUILD_TMP_DIR="$(mktemp -d /tmp/flowkey_build_tmp.XXXXXX)"
+    export TMPDIR="$BUILD_TMP_DIR"
+    if command -v cygpath >/dev/null 2>&1; then
+        BUILD_TMP_WIN="$(cygpath -w "$BUILD_TMP_DIR")"
+        export TMP="$BUILD_TMP_WIN"
+        export TEMP="$BUILD_TMP_WIN"
+    else
+        export TMP="$BUILD_TMP_DIR"
+        export TEMP="$BUILD_TMP_DIR"
+    fi
+
     export CARGO_TARGET_DIR="$(mktemp -d /tmp/cargo_target_flowkey.XXXXXX)"
 
     NPM="npm.cmd"
