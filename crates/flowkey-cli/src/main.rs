@@ -129,12 +129,8 @@ async fn main() -> Result<()> {
         },
         Command::Discover => {
             let config = Config::load_or_default()?;
-            let peers = flowkey_net::discovery::discover(Duration::from_secs(2))?;
-            let peers = peers
-                .into_iter()
-                .filter(|peer| peer.id != config.node.id)
-                .collect::<Vec<_>>();
-
+            let peers = flowkey_net::discovery::discover(Duration::from_secs(2), Some(&config.node.id))?;
+            
             if peers.is_empty() {
                 println!("no LAN peers discovered");
             } else {

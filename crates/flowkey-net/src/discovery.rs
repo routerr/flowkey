@@ -88,7 +88,7 @@ pub fn advertise(config: &Config, is_pairing: bool, pairing_port: Option<u16>) -
     Ok(DiscoveryAdvertisement { daemon })
 }
 
-pub fn discover(timeout: Duration) -> Result<Vec<DiscoveredPeer>> {
+pub fn discover(timeout: Duration, exclude_id: Option<&str>) -> Result<Vec<DiscoveredPeer>> {
     let daemon = ServiceDaemon::new().context("failed to start mDNS discovery daemon")?;
     let receiver = daemon
         .browse(SERVICE_TYPE)
@@ -104,6 +104,11 @@ pub fn discover(timeout: Duration) -> Result<Vec<DiscoveredPeer>> {
         match receiver.recv_timeout(remaining) {
             Ok(ServiceEvent::ServiceResolved(service)) => {
                 if let Some(peer) = peer_from_resolved_service(&service) {
+                    if let Some(exclude) = exclude_id {
+                        if peer.id == exclude {
+                            continue;
+                        }
+                    }
                     peers.insert(peer.id.clone(), peer);
                 }
             }

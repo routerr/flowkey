@@ -18,7 +18,8 @@ struct AppState {
 
 #[tauri::command]
 async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
-  flowkey_net::discovery::discover(Duration::from_secs(1))
+  let config = Config::load_or_default().map_err(|e| e.to_string())?;
+  flowkey_net::discovery::discover(Duration::from_secs(1), Some(&config.node.id))
     .map_err(|e| e.to_string())
 }
 

@@ -237,7 +237,8 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                     let mut current_addr = peer.addr.clone();
                     
                     // Discover fresh IPs and race them
-                    if let Ok(Ok(discovered)) = tokio::task::spawn_blocking(|| flowkey_net::discovery::discover(Duration::from_secs(1))).await {
+                    let local_id = config.node.id.clone();
+                    if let Ok(Ok(discovered)) = tokio::task::spawn_blocking(move || flowkey_net::discovery::discover(Duration::from_secs(1), Some(&local_id))).await {
                         if let Some(discovered_peer) = discovered.into_iter().find(|p| p.id == peer.id) {
                             let mut candidates = discovered_peer.addrs.clone();
                             if !candidates.contains(&current_addr) {
