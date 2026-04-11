@@ -22,8 +22,8 @@ esac
 echo "Platform detected: $PLATFORM"
 
 if [ "$PLATFORM" == "windows" ]; then
-    # Inject common Windows paths if missing
-    export PATH="$PATH:/c/msys64/ucrt64/bin:$HOME/.cargo/bin:/c/Program Files/nodejs"
+    # Inject common Windows paths if missing. Prioritize Winget Node.js to avoid MSYS2/Rolldown binding bugs.
+    export PATH="/c/Users/user/AppData/Local/Microsoft/WinGet/Packages/OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe/node-v24.14.0-win-x64:$HOME/.cargo/bin:/c/msys64/ucrt64/bin:$PATH"
     NPM="npm.cmd"
     NPX="npx.cmd"
     TAURI_BIN="frontend/node_modules/.bin/tauri.cmd"
