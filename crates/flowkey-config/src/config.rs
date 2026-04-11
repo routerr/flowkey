@@ -92,8 +92,20 @@ impl Config {
 
         if path.exists() {
             let mut config = Self::load_from_path(&path)?;
+            let mut needs_save = false;
+
             if config.node.private_key.is_empty() || config.node.public_key.is_empty() {
                 config.regenerate_node_keys()?;
+                needs_save = true;
+            }
+
+            // Migrate existing configs from passive to exclusive capture mode.
+            if config.switch.capture_mode == CaptureMode::Passive {
+                config.switch.capture_mode = CaptureMode::Exclusive;
+                needs_save = true;
+            }
+
+            if needs_save {
                 config.save_to_path(&path)?;
             }
 

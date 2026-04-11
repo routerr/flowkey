@@ -47,4 +47,5 @@ export interface DaemonStatus {
   capture_restarts: number;
   input_injection_backend: string;
   notes: string[];
+  connected_peer_ids: string[];
 }

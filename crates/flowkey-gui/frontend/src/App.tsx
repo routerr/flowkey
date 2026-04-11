@@ -139,6 +139,11 @@ function App() {
   }
 
   async function switchToPeer(peerId: string) {
+    if (status && !status.connected_peer_ids.includes(peerId)) {
+      setError(`Cannot control ${peerId}: peer is not currently connected. Make sure flowkey is running on the remote device.`)
+      return
+    }
+    setError(null)
     try {
       await invoke('switch_to_peer', { peerId })
     } catch (e) {
@@ -280,18 +285,34 @@ function App() {
               <section className="config-section">
                 <h2>Trusted Peers</h2>
                 <ul className="trusted-list">
-                  {config?.peers.map(peer => (
-                    <li key={peer.id} className="trusted-item">
-                      <div className="peer-info">
-                        <span className="peer-name">{peer.name}</span>
-                        <span className="peer-id">{peer.id}</span>
-                      </div>
-                      <div className="peer-actions">
-                        <button onClick={() => switchToPeer(peer.id)} className="btn-small btn-primary">Control</button>
-                        <button onClick={() => removePeer(peer.id)} className="btn-text">Remove</button>
-                      </div>
-                    </li>
-                  ))}
+                  {config?.peers.map(peer => {
+                    const isConnected = status?.connected_peer_ids.includes(peer.id) ?? false
+                    const isControlling = status?.state === 'controlling' && status.active_peer_id === peer.id
+                    return (
+                      <li key={peer.id} className="trusted-item">
+                        <div className="peer-info">
+                          <span className="peer-name">{peer.name}</span>
+                          <span className="peer-id">{peer.id}</span>
+                          <span className={`peer-conn-badge ${isConnected ? 'connected' : 'offline'}`}>
+                            {isConnected ? 'Connected' : 'Offline'}
+                          </span>
+                        </div>
+                        <div className="peer-actions">
+                          {isControlling ? (
+                            <button onClick={releaseControl} className="btn-small btn-error">Release</button>
+                          ) : (
+                            <button
+                              onClick={() => switchToPeer(peer.id)}
+                              className="btn-small btn-primary"
+                              disabled={!isConnected}
+                              title={isConnected ? `Control ${peer.name}` : 'Peer is offline'}
+                            >Control</button>
+                          )}
+                          <button onClick={() => removePeer(peer.id)} className="btn-text">Remove</button>
+                        </div>
+                      </li>
+                    )
+                  })}
 
                   {config?.peers.length === 0 && <li className="empty">No trusted peers yet.</li>}
                 </ul>

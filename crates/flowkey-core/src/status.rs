@@ -21,6 +21,9 @@ pub struct RuntimeSnapshot {
     pub input_injection_backend: String,
     #[serde(default)]
     pub notes: Vec<String>,
+    /// Peer IDs that currently have an authenticated TCP session with this daemon.
+    #[serde(default)]
+    pub connected_peer_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +39,9 @@ pub struct DaemonStatus {
     pub input_injection_backend: String,
     #[serde(default)]
     pub notes: Vec<String>,
+    /// Peer IDs that currently have an authenticated TCP session with this daemon.
+    #[serde(default)]
+    pub connected_peer_ids: Vec<String>,
 }
 
 fn default_input_injection_backend() -> String {
@@ -56,6 +62,7 @@ impl DaemonStatus {
             capture_restarts: snapshot.capture_restarts,
             input_injection_backend: snapshot.input_injection_backend.clone(),
             notes: snapshot.notes.clone(),
+            connected_peer_ids: snapshot.connected_peer_ids.clone(),
         }
     }
 }
@@ -85,6 +92,9 @@ impl RuntimeSnapshot {
                 | DaemonState::ControlledBy { .. }
         );
 
+        let mut connected_peer_ids: Vec<String> = runtime.sessions.keys().cloned().collect();
+        connected_peer_ids.sort();
+
         Self {
             state,
             active_peer_id,
@@ -93,6 +103,7 @@ impl RuntimeSnapshot {
             capture_restarts: runtime.diagnostics.capture_restarts,
             input_injection_backend: runtime.diagnostics.input_injection_backend.clone(),
             notes: runtime.diagnostics.notes.clone(),
+            connected_peer_ids,
         }
     }
 }
@@ -183,6 +194,7 @@ mod tests {
             capture_restarts: 2,
             input_injection_backend: "native".to_string(),
             notes: vec!["accessibility permission granted".to_string()],
+            connected_peer_ids: vec!["office-pc".to_string()],
         };
         let path = std::env::temp_dir().join(format!(
             "flowkey-status-test-{}-{}.toml",

@@ -486,6 +486,7 @@ mod tests {
             capture_restarts: 0,
             input_injection_backend: "native".to_string(),
             notes: vec!["accessibility permission granted".to_string()],
+            connected_peer_ids: vec!["office-pc".to_string()],
         };
 
         assert!(active_peer_is_trusted(&config, Some(&status)));
