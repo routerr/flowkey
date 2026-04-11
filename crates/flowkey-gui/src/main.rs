@@ -177,21 +177,30 @@ async fn remove_peer(peer_id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn switch_to_peer(peer_id: String) -> Result<(), String> {
+    tracing::info!(peer_id = %peer_id, "gui: switch_to_peer invoked");
     let control_path = Config::control_path().map_err(|e| e.to_string())?;
-    let cmd = flowkey_core::DaemonCommand::switch(peer_id);
+    let cmd = flowkey_core::DaemonCommand::switch(peer_id.clone());
 
     #[cfg(target_os = "macos")]
     {
         let socket_path = control_path.with_extension("sock");
         if !socket_path.exists() {
+            tracing::warn!(path = %socket_path.display(), "gui: daemon control socket missing");
             return Err("daemon control socket not found; daemon may still be starting".to_string());
         }
         let mut stream = tokio::net::UnixStream::connect(&socket_path)
             .await
-            .map_err(|e| format!("failed to connect to daemon: {e}"))?;
+            .map_err(|e| {
+                tracing::error!(%e, "gui: failed to connect daemon socket");
+                format!("failed to connect to daemon: {e}")
+            })?;
         cmd.send_to(&mut stream)
             .await
-            .map_err(|e| format!("failed to send command to daemon: {e}"))?;
+            .map_err(|e| {
+                tracing::error!(%e, "gui: failed to write switch command");
+                format!("failed to send command to daemon: {e}")
+            })?;
+        tracing::info!(peer_id = %peer_id, "gui: switch command written to socket");
         return Ok(());
     }
 
@@ -214,6 +223,7 @@ async fn switch_to_peer(peer_id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn release_control() -> Result<(), String> {
+    tracing::info!("gui: release_control invoked");
     let control_path = Config::control_path().map_err(|e| e.to_string())?;
     let cmd = flowkey_core::DaemonCommand::release();
 
@@ -221,14 +231,22 @@ async fn release_control() -> Result<(), String> {
     {
         let socket_path = control_path.with_extension("sock");
         if !socket_path.exists() {
+            tracing::warn!(path = %socket_path.display(), "gui: daemon control socket missing");
             return Err("daemon control socket not found; daemon may still be starting".to_string());
         }
         let mut stream = tokio::net::UnixStream::connect(&socket_path)
             .await
-            .map_err(|e| format!("failed to connect to daemon: {e}"))?;
+            .map_err(|e| {
+                tracing::error!(%e, "gui: failed to connect daemon socket");
+                format!("failed to connect to daemon: {e}")
+            })?;
         cmd.send_to(&mut stream)
             .await
-            .map_err(|e| format!("failed to send command to daemon: {e}"))?;
+            .map_err(|e| {
+                tracing::error!(%e, "gui: failed to write release command");
+                format!("failed to send command to daemon: {e}")
+            })?;
+        tracing::info!("gui: release command written to socket");
         return Ok(());
     }
 
@@ -266,7 +284,30 @@ fn request_daemon_shutdown(app: tauri::AppHandle) {
     });
 }
 
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+
+    let Ok(log_dir) = Config::log_dir() else {
+        return;
+    };
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        return;
+    }
+
+    let file_appender = tracing_appender::rolling::never(&log_dir, "flowkey.log");
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,flowkey_daemon=debug,flowkey_net=info"));
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(file_appender)
+        .with_ansi(false)
+        .try_init();
+}
+
 fn main() {
+    init_tracing();
+
     // Set up panic hook for debugging
     std::panic::set_hook(Box::new(|info| {
         let msg = match info.payload().downcast_ref::<&str>() {

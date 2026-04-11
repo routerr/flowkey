@@ -52,6 +52,7 @@ extern "C" {
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     fn CFRunLoopRun();
     static kCFRunLoopCommonModes: CFRunLoopMode;
+    fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> i32;
 }
 
 pub struct MacosCapture {
@@ -109,6 +110,7 @@ impl InputCapture for MacosCapture {
                 exclusive,
                 tap: std::ptr::null_mut(),
                 last_flags: CGEventFlags::CGEventFlagNull,
+                cursor_decoupled: false,
             });
 
             let context_ptr: *mut TapContext = &mut *context;
@@ -175,6 +177,15 @@ impl InputCapture for MacosCapture {
     fn set_suppression_enabled(&mut self, enabled: bool) {
         if self.exclusive {
             self.suppression_enabled.store(enabled, Ordering::SeqCst);
+            // Decouple the on-screen cursor from hardware mouse input while
+            // we are the controller. CGEventTap alone does not freeze the
+            // cursor — the OS moves it independently of the event stream —
+            // so we must explicitly disassociate it here and reassociate on
+            // release. Our tap still receives raw MOUSE_EVENT_DELTA_X/Y from
+            // the HID layer, which we forward to the remote peer.
+            unsafe {
+                CGAssociateMouseAndMouseCursorPosition(!enabled);
+            }
         }
     }
 }
@@ -188,6 +199,7 @@ struct TapContext {
     exclusive: bool,
     tap: CFMachPortRef,
     last_flags: CGEventFlags,
+    cursor_decoupled: bool,
 }
 
 unsafe extern "C" fn raw_callback(
@@ -215,6 +227,17 @@ unsafe extern "C" fn raw_callback(
     }
 
     let suppress_active = context.exclusive && context.suppression_enabled.load(Ordering::SeqCst);
+
+    // Sync cursor decoupling with current suppression state. CGEventTap
+    // alone cannot freeze the on-screen cursor, so whenever suppression
+    // flips we must explicitly (dis)associate hardware mouse input from
+    // cursor position. Doing this inside the tap callback means both the
+    // hotkey path and the IPC path (which only flips the atomic) converge
+    // on the same decouple without extra wiring.
+    if suppress_active != context.cursor_decoupled {
+        CGAssociateMouseAndMouseCursorPosition(!suppress_active);
+        context.cursor_decoupled = suppress_active;
+    }
 
     // Mouse moves in exclusive+suppression mode: use raw hardware deltas.
     // This avoids the last_mouse_position tracking, which becomes unreliable
