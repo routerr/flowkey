@@ -6,6 +6,7 @@ authors = ["Ray Chang"]
 license = "MIT"
 
 [package.metadata.tauri]
+[package.metadata.tauri-winres]
 
 [dependencies]
 tauri = { version = "1", features = ["system-tray", "api-all", "custom-protocol"] }
