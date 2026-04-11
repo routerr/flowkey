@@ -16,7 +16,7 @@
     },
     "bundle": {
       "active": true,
-      "targets": ["app"],
+      "targets": "all",
       "identifier": "com.flowkey.app",
       "icon": [
         "icons/32x32.png",

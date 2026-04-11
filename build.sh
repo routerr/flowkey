@@ -32,10 +32,16 @@ if [ "$PLATFORM" == "windows" ]; then
     NPM="npm.cmd"
     NPX="npx.cmd"
     TAURI_BIN="frontend/node_modules/.bin/tauri.cmd"
+    TAURI_BUILD_ARGS=""
 else
     NPM="npm"
     NPX="npx"
     TAURI_BIN="frontend/node_modules/.bin/tauri"
+    if [ "$PLATFORM" == "macos" ]; then
+        TAURI_BUILD_ARGS="--bundles app"
+    else
+        TAURI_BUILD_ARGS=""
+    fi
 fi
 
 # 1. Install/Update Frontend Dependencies
@@ -57,10 +63,10 @@ cd crates/flowkey-gui
 
 if [ -f "$TAURI_BIN" ]; then
     echo "Using local Tauri CLI to build..."
-    ./"$TAURI_BIN" build
+    ./"$TAURI_BIN" build $TAURI_BUILD_ARGS
 elif command -v $NPX &> /dev/null; then
     echo "Using npx to run Tauri CLI..."
-    $NPX @tauri-apps/cli build
+    $NPX @tauri-apps/cli build $TAURI_BUILD_ARGS
 else
     echo "Tauri CLI not found, falling back to manual cargo build..."
     cargo build --release
