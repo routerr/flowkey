@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+#[cfg(not(target_os = "windows"))]
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +29,9 @@ pub(crate) fn spawn_control_watcher(
     suppression_state: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
+        #[cfg(target_os = "windows")]
+        let _ = &control_path;
+
         #[cfg(target_os = "macos")]
         {
             let socket_path = control_path.with_extension("sock");
