@@ -12,6 +12,16 @@ Set-Location $PROJECT_ROOT
 
 Write-Host "--- Building Flowkey (Windows) ---" -ForegroundColor Cyan
 
+# 0. Terminate any running Flowkey processes to unlock files
+Write-Host "Step 0: Checking for running Flowkey processes..." -ForegroundColor Green
+$processes = Get-Process "flowkey-gui", "flky" -ErrorAction SilentlyContinue
+if ($processes) {
+    Write-Host "Closing running instances..." -ForegroundColor Yellow
+    $processes | Stop-Process -Force
+    # Give Windows a moment to release the file handles
+    Start-Sleep -Seconds 1
+}
+
 # 1. Install/Update Frontend Dependencies
 Write-Host "Step 1: Installing frontend dependencies..." -ForegroundColor Green
 Set-Location "crates/flowkey-gui/frontend"
