@@ -45,6 +45,17 @@ pub(crate) async fn run_daemon_with_shutdown(
         .parse()
         .with_context(|| format!("invalid listen address {}", config.node.listen_addr))?;
 
+    #[cfg(target_os = "windows")]
+    {
+        let permissions = flowkey_platform_windows::permissions::PermissionStatus::probe();
+        if !permissions.user_session {
+            error!("flowkey daemon must run inside an interactive desktop session; aborting");
+            return Err(anyhow::anyhow!(
+                "flowkey daemon must run inside an interactive desktop session"
+            ));
+        }
+    }
+
     let probe_addr = config.node.listen_addr.clone();
     let local_id = config.node.id.clone();
     tokio::spawn(async move {
