@@ -6,6 +6,12 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+// IPC wire format intentionally uses JSON rather than bincode. `DaemonCommand`
+// is serialized with `#[serde(tag = "kind")]` (internally tagged), which
+// bincode 1.x cannot deserialize — it is not self-describing and does not
+// understand tag-based enum representations. JSON handles it correctly and
+// the payload is tiny, so the overhead is negligible.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DaemonCommand {
@@ -28,7 +34,8 @@ impl DaemonCommand {
     where
         S: AsyncWriteExt + Unpin,
     {
-        let payload = bincode::serialize(self).context("failed to serialize daemon command")?;
+        let payload =
+            serde_json::to_vec(self).context("failed to serialize daemon command")?;
         let len = payload.len() as u32;
         stream
             .write_u32(len)
@@ -60,7 +67,8 @@ impl DaemonCommand {
             .await
             .context("failed to read command payload")?;
 
-        let command = bincode::deserialize(&payload).context("failed to deserialize command")?;
+        let command =
+            serde_json::from_slice(&payload).context("failed to deserialize command")?;
         Ok(command)
     }
 
@@ -121,6 +129,37 @@ mod tests {
         let decoded: DaemonCommand = toml::from_str(&encoded).expect("command should deserialize");
 
         assert_eq!(decoded, command);
+    }
+
+    #[tokio::test]
+    async fn command_round_trips_over_async_stream() {
+        // Regression: bincode 1.x cannot round-trip `#[serde(tag = "kind")]`
+        // enums, so `send_to` / `read_from` must use a self-describing format.
+        use tokio::io::duplex;
+
+        let (mut client, mut server) = duplex(4096);
+        let original = DaemonCommand::switch("desktop-x96f117");
+        original
+            .send_to(&mut client)
+            .await
+            .expect("send should succeed");
+        drop(client);
+        let decoded = DaemonCommand::read_from(&mut server)
+            .await
+            .expect("read should succeed");
+        assert_eq!(decoded, original);
+
+        let (mut client, mut server) = duplex(4096);
+        let release = DaemonCommand::release();
+        release
+            .send_to(&mut client)
+            .await
+            .expect("send should succeed");
+        drop(client);
+        let decoded = DaemonCommand::read_from(&mut server)
+            .await
+            .expect("read should succeed");
+        assert_eq!(decoded, release);
     }
 
     #[test]
