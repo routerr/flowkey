@@ -22,6 +22,11 @@ esac
 echo "Platform detected: $PLATFORM"
 
 if [ "$PLATFORM" == "windows" ]; then
+    # Terminate running instances to unlock files
+    echo "Step 0: Checking for running Flowkey processes..."
+    taskkill //F //IM flowkey-gui.exe //IM flky.exe 2>/dev/null || true
+    sleep 1
+
     # Inject common Windows paths if missing. Prioritize Winget Node.js to avoid MSYS2/Rolldown binding bugs.
     export PATH="/c/Users/user/AppData/Local/Microsoft/WinGet/Packages/OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe/node-v24.14.0-win-x64:$HOME/.cargo/bin:/c/msys64/ucrt64/bin:$PATH"
     NPM="npm.cmd"
