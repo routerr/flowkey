@@ -14,7 +14,7 @@ Write-Host "--- Building Flowkey (Windows) ---" -ForegroundColor Cyan
 
 # 0. Terminate any running Flowkey processes to unlock files
 Write-Host "Step 0: Checking for running Flowkey processes..." -ForegroundColor Green
-$processes = Get-Process "flowkey-gui", "flky" -ErrorAction SilentlyContinue
+$processes = Get-Process "flowkey-gui", "flky", "flowkey" -ErrorAction SilentlyContinue
 if ($processes) {
     Write-Host "Closing running instances..." -ForegroundColor Yellow
     $processes | Stop-Process -Force
