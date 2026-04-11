@@ -124,9 +124,10 @@ impl CaptureState {
         let input = self.translate_event(event)?;
 
         if let Some(loopback) = loopback {
-            let mut loopback = loopback
-                .lock()
-                .expect("loopback suppressor mutex should not be poisoned");
+            let mut loopback = match loopback.lock() {
+                Ok(l) => l,
+                Err(_) => return None,
+            };
             if loopback.should_suppress(&input) {
                 return None;
             }

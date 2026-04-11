@@ -141,10 +141,9 @@ impl NativeInputSink {
 
     fn record_loopback(&mut self, event: &InputEvent) {
         if let Some(loopback) = &self.loopback {
-            let mut loopback = loopback
-                .lock()
-                .expect("loopback suppressor mutex should not be poisoned");
-            loopback.record(event.clone());
+            if let Ok(mut loopback) = loopback.lock() {
+                loopback.record(event.clone());
+            }
         }
     }
 
@@ -763,10 +762,9 @@ fn record_loopback_key_event(
         }
     };
 
-    let mut loopback = loopback
-        .lock()
-        .expect("loopback suppressor mutex should not be poisoned");
-    loopback.record(event);
+    if let Ok(mut loopback) = loopback.lock() {
+        loopback.record(event);
+    }
 }
 
 #[cfg(target_os = "macos")]

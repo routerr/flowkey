@@ -155,6 +155,29 @@ async fn release_control() -> Result<(), String> {
 }
 
 fn main() {
+  // Set up panic hook for debugging
+  std::panic::set_hook(Box::new(|info| {
+    let msg = match info.payload().downcast_ref::<&str>() {
+      Some(s) => *s,
+      None => match info.payload().downcast_ref::<String>() {
+        Some(s) => &**s,
+        None => "Box<Any>",
+      },
+    };
+    let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_default();
+    let panic_msg = format!("Panic occurred at {}: {}\n", location, msg);
+    
+    #[cfg(target_os = "macos")]
+    {
+      if let Ok(home) = std::env::var("HOME") {
+        let log_path = std::path::PathBuf::from(home).join("Library/Logs/flowkey-panic.log");
+        let _ = std::fs::write(log_path, &panic_msg);
+      }
+    }
+    
+    eprintln!("{}", panic_msg);
+  }));
+
   let open = CustomMenuItem::new("open".to_string(), "Open Manager");
   let quit = CustomMenuItem::new("quit".to_string(), "Quit");
   let tray_menu = SystemTrayMenu::new()

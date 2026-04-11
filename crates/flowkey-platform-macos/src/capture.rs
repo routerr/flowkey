@@ -61,8 +61,14 @@ impl InputCapture for MacosCapture {
                 let grab_tracker = Arc::clone(&tracker);
                 let grab_state = Arc::clone(&state);
                 let result = rdev::grab(move |event: rdev::Event| {
-                    let mut tracker = grab_tracker.lock().unwrap();
-                    let mut state = grab_state.lock().unwrap();
+                    let mut tracker = match grab_tracker.lock() {
+                        Ok(t) => t,
+                        Err(_) => return Some(event), // Poisoned, allow event to pass
+                    };
+                    let mut state = match grab_state.lock() {
+                        Ok(s) => s,
+                        Err(_) => return Some(event), // Poisoned, allow event to pass
+                    };
 
                     let saved_mouse_position = state.last_mouse_position;
                     let signal = state.translate(event.clone(), &mut tracker, loopback.as_ref());
@@ -102,8 +108,14 @@ impl InputCapture for MacosCapture {
                 let listen_tracker = Arc::clone(&tracker);
                 let listen_state = Arc::clone(&state);
                 let result = rdev::listen(move |event: rdev::Event| {
-                    let mut tracker = listen_tracker.lock().unwrap();
-                    let mut state = listen_state.lock().unwrap();
+                    let mut tracker = match listen_tracker.lock() {
+                        Ok(t) => t,
+                        Err(_) => return,
+                    };
+                    let mut state = match listen_state.lock() {
+                        Ok(s) => s,
+                        Err(_) => return,
+                    };
 
                     if let Some(signal) = state.translate(event, &mut tracker, loopback.as_ref()) {
                         if !matches!(signal, CaptureSignal::HotkeySuppressed) {
