@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, EventField};
 use core_graphics::sys::CGEventRef;
 use flowkey_input::capture::{CaptureSignal, CaptureState, InputCapture};
+use flowkey_input::event::InputEvent;
 use flowkey_input::hotkey::{HotkeyBinding, HotkeyTracker};
 use flowkey_input::loopback::SharedLoopbackSuppressor;
 use foreign_types_shared::ForeignType;
@@ -213,6 +214,42 @@ unsafe extern "C" fn raw_callback(
         return cg_event.as_ptr();
     }
 
+    let suppress_active = context.exclusive && context.suppression_enabled.load(Ordering::SeqCst);
+
+    // Mouse moves in exclusive+suppression mode: use raw hardware deltas.
+    // This avoids the last_mouse_position tracking, which becomes unreliable
+    // once the OS cursor is frozen (deltas accumulate incorrectly otherwise).
+    if suppress_active
+        && matches!(
+            event_type,
+            CGEventType::MouseMoved
+                | CGEventType::LeftMouseDragged
+                | CGEventType::RightMouseDragged
+        )
+    {
+        let raw_dx = cg_event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_X);
+        let raw_dy = cg_event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_Y);
+        if raw_dx != 0 || raw_dy != 0 {
+            let modifiers = {
+                let state = lock_recovering(&context.state, "capture state");
+                state.modifiers
+            };
+            let timestamp_us = SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64;
+            let input = InputEvent::MouseMove {
+                dx: raw_dx as i32,
+                dy: raw_dy as i32,
+                modifiers,
+                timestamp_us,
+            };
+            let _ = context.sender.send(CaptureSignal::Input(input));
+        }
+        // Fully drop the event so the local Mac cursor does not move.
+        return std::ptr::null_mut();
+    }
+
     let Some(translated_event) = convert_cg_event(event_type, &cg_event, &mut context.last_flags)
     else {
         return cg_event.as_ptr();
@@ -221,7 +258,6 @@ unsafe extern "C" fn raw_callback(
     let mut tracker = lock_recovering(&context.tracker, "hotkey tracker");
     let mut state = lock_recovering(&context.state, "capture state");
 
-    let saved_mouse_position = state.last_mouse_position;
     match state.translate(
         translated_event.clone(),
         &mut tracker,
@@ -229,16 +265,22 @@ unsafe extern "C" fn raw_callback(
     ) {
         Some(CaptureSignal::HotkeyPressed) => {
             let _ = context.sender.send(CaptureSignal::HotkeyPressed);
+            // Drop the hotkey key itself so it does not leak to local apps.
+            std::ptr::null_mut()
+        }
+        Some(CaptureSignal::HotkeySuppressed) => {
+            // Always deliver key release for hotkey modifiers locally,
+            // otherwise stuck-key behavior.
             cg_event.as_ptr()
         }
-        Some(CaptureSignal::HotkeySuppressed) => cg_event.as_ptr(),
         Some(CaptureSignal::Input(input)) => {
             let _ = context.sender.send(CaptureSignal::Input(input));
-            if context.exclusive && context.suppression_enabled.load(Ordering::SeqCst) {
-                state.last_mouse_position = saved_mouse_position;
-                cg_event.set_type(CGEventType::Null);
+            if suppress_active {
+                // Fully drop local input while controlling remote (explicit mode).
+                std::ptr::null_mut()
+            } else {
+                cg_event.as_ptr()
             }
-            cg_event.as_ptr()
         }
         None => cg_event.as_ptr(),
     }
