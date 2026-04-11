@@ -3,7 +3,7 @@ use std::thread;
 
 use crate::event::{InputEvent, Modifiers};
 use crate::hotkey::{HotkeyBinding, HotkeyOutcome, HotkeyTracker};
-use crate::loopback::SharedLoopbackSuppressor;
+use crate::loopback::{lock_recovering, SharedLoopbackSuppressor};
 use crate::normalize::{
     normalize_button, normalize_key_code, normalize_mouse_move_delta, normalize_wheel_delta,
 };
@@ -124,10 +124,7 @@ impl CaptureState {
         let input = self.translate_event(event)?;
 
         if let Some(loopback) = loopback {
-            let mut loopback = match loopback.lock() {
-                Ok(l) => l,
-                Err(_) => return None,
-            };
+            let mut loopback = lock_recovering(loopback);
             if loopback.should_suppress(&input) {
                 return None;
             }
@@ -266,9 +263,14 @@ mod tests {
             time: std::time::SystemTime::now(),
             name: None,
         });
-        
+
         match second {
-            Some(InputEvent::MouseMove { dx, dy, modifiers, timestamp_us }) => {
+            Some(InputEvent::MouseMove {
+                dx,
+                dy,
+                modifiers,
+                timestamp_us,
+            }) => {
                 assert_eq!(dx, 4);
                 assert_eq!(dy, -3);
                 assert_eq!(modifiers, crate::event::Modifiers::none());

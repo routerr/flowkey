@@ -129,8 +129,9 @@ async fn main() -> Result<()> {
         },
         Command::Discover => {
             let config = Config::load_or_default()?;
-            let peers = flowkey_net::discovery::discover(Duration::from_secs(2), Some(&config.node.id))?;
-            
+            let peers =
+                flowkey_net::discovery::discover(Duration::from_secs(2), Some(&config.node.id))?;
+
             if peers.is_empty() {
                 println!("no LAN peers discovered");
             } else {
@@ -175,7 +176,9 @@ async fn main() -> Result<()> {
                 if socket_path.exists() {
                     match UnixStream::connect(&socket_path).await {
                         Ok(mut stream) => {
-                            if let Ok(()) = DaemonCommand::switch(&peer_id).send_to(&mut stream).await {
+                            if let Ok(()) =
+                                DaemonCommand::switch(&peer_id).send_to(&mut stream).await
+                            {
                                 info!(%peer_id, path = %socket_path.display(), "sent switch request to daemon socket");
                                 println!("switch request sent to daemon");
                                 sent_via_socket = true;

@@ -120,7 +120,9 @@ impl HotkeyTracker {
         }
 
         match event {
-            InputEvent::KeyDown { code, modifiers, .. } => {
+            InputEvent::KeyDown {
+                code, modifiers, ..
+            } => {
                 if !self.latched
                     && self.binding.code_matches(code)
                     && *modifiers == self.binding.modifiers

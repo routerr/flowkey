@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use flowkey_config::{Config, PeerConfig};
 use flowkey_crypto::{NodeIdentity, SessionChallenge, SessionResponse};
 use flowkey_input::event::InputEvent;
@@ -9,7 +10,6 @@ use flowkey_protocol::message::{
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{interval, Duration};
-use crossbeam_channel::{bounded, Receiver, Sender};
 use tracing::{info, warn};
 
 use crate::frame::{read_message, write_message};
@@ -373,7 +373,7 @@ pub async fn run_authenticated_session(
 ) -> Result<()> {
     let (bridge_tx, mut bridge_rx) = unbounded_channel();
     let bridge_outbound = outbound.clone();
-    
+
     // Spawn a blocking task to bridge crossbeam channel to tokio
     tokio::task::spawn_blocking(move || {
         while let Ok(command) = bridge_outbound.recv() {
@@ -637,9 +637,15 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("server should accept");
-            super::read_message(&mut stream)
-                .await
-                .expect("server should read")
+            loop {
+                match super::read_message(&mut stream)
+                    .await
+                    .expect("server should read")
+                {
+                    super::Message::Heartbeat => continue,
+                    message => break message,
+                }
+            }
         });
 
         let client = TcpStream::connect(addr)

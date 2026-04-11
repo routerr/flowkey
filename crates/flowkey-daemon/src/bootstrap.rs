@@ -235,17 +235,29 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                 let mut backoff = ReconnectBackoff::default();
                 loop {
                     let mut current_addr = peer.addr.clone();
-                    
+
                     // Discover fresh IPs and race them
                     let local_id = config.node.id.clone();
-                    if let Ok(Ok(discovered)) = tokio::task::spawn_blocking(move || flowkey_net::discovery::discover(Duration::from_secs(1), Some(&local_id))).await {
-                        if let Some(discovered_peer) = discovered.into_iter().find(|p| p.id == peer.id) {
+                    if let Ok(Ok(discovered)) = tokio::task::spawn_blocking(move || {
+                        flowkey_net::discovery::discover(Duration::from_secs(1), Some(&local_id))
+                    })
+                    .await
+                    {
+                        if let Some(discovered_peer) =
+                            discovered.into_iter().find(|p| p.id == peer.id)
+                        {
                             let mut candidates = discovered_peer.addrs.clone();
                             if !candidates.contains(&current_addr) {
                                 candidates.push(current_addr.clone());
                             }
-                            
-                            if let Ok(winner) = flowkey_net::probe::run_reachability_race(&candidates, &peer.id, Duration::from_millis(500)).await {
+
+                            if let Ok(winner) = flowkey_net::probe::run_reachability_race(
+                                &candidates,
+                                &peer.id,
+                                Duration::from_millis(500),
+                            )
+                            .await
+                            {
                                 current_addr = winner;
                             }
                         }
@@ -263,7 +275,7 @@ pub async fn run_daemon(config: Config) -> Result<()> {
                                 .expect("daemon runtime mutex should not be poisoned")
                                 .mark_authenticated(peer_id.clone());
                             let (sender, receiver) = session_channel();
-                            
+
                             if resumed_role == Some(Role::Controlling) {
                                 let request_id = uuid::Uuid::new_v4().to_string();
                                 info!(peer = %peer_id, "automatically resuming control session");

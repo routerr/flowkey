@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
 use flowkey_input::capture::{CaptureSignal, CaptureState, InputCapture};
@@ -61,14 +61,8 @@ impl InputCapture for MacosCapture {
                 let grab_tracker = Arc::clone(&tracker);
                 let grab_state = Arc::clone(&state);
                 let result = rdev::grab(move |event: rdev::Event| {
-                    let mut tracker = match grab_tracker.lock() {
-                        Ok(t) => t,
-                        Err(_) => return Some(event), // Poisoned, allow event to pass
-                    };
-                    let mut state = match grab_state.lock() {
-                        Ok(s) => s,
-                        Err(_) => return Some(event), // Poisoned, allow event to pass
-                    };
+                    let mut tracker = lock_recovering(&grab_tracker, "hotkey tracker");
+                    let mut state = lock_recovering(&grab_state, "capture state");
 
                     let saved_mouse_position = state.last_mouse_position;
                     let signal = state.translate(event.clone(), &mut tracker, loopback.as_ref());
@@ -108,14 +102,8 @@ impl InputCapture for MacosCapture {
                 let listen_tracker = Arc::clone(&tracker);
                 let listen_state = Arc::clone(&state);
                 let result = rdev::listen(move |event: rdev::Event| {
-                    let mut tracker = match listen_tracker.lock() {
-                        Ok(t) => t,
-                        Err(_) => return,
-                    };
-                    let mut state = match listen_state.lock() {
-                        Ok(s) => s,
-                        Err(_) => return,
-                    };
+                    let mut tracker = lock_recovering(&listen_tracker, "hotkey tracker");
+                    let mut state = lock_recovering(&listen_state, "capture state");
 
                     if let Some(signal) = state.translate(event, &mut tracker, loopback.as_ref()) {
                         if !matches!(signal, CaptureSignal::HotkeySuppressed) {
@@ -148,6 +136,17 @@ impl InputCapture for MacosCapture {
     fn set_suppression_enabled(&mut self, enabled: bool) {
         if self.exclusive {
             self.suppression_enabled.store(enabled, Ordering::SeqCst);
+        }
+    }
+}
+
+fn lock_recovering<'a, T>(mutex: &'a Arc<Mutex<T>>, label: &'static str) -> MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            warn!(target: "capture", mutex = label, "poisoned mutex, recovering");
+            mutex.clear_poison();
+            poisoned.into_inner()
         }
     }
 }

@@ -23,7 +23,7 @@ use core_graphics::geometry::{CGPoint, CGRect};
 use crate::event::{InputEvent, Modifiers, MouseButton};
 use crate::inject::InputInjector;
 use crate::keycode::{modifier_from_mask, parse_key_code, KeyCode, ModifierKind, NamedKey};
-use crate::loopback::SharedLoopbackSuppressor;
+use crate::loopback::{lock_recovering, SharedLoopbackSuppressor};
 
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,25 +95,35 @@ impl NativeInputSink {
     fn handle_input_event(&mut self, event: &InputEvent) -> Result<(), String> {
         self.record_loopback(event);
         match event {
-            InputEvent::KeyDown { code, modifiers, .. } => {
+            InputEvent::KeyDown {
+                code, modifiers, ..
+            } => {
                 let key_code = parse_key_code(code);
                 self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
                 self.key_action(key_code, Direction::Press)
             }
-            InputEvent::KeyUp { code, modifiers, .. } => {
+            InputEvent::KeyUp {
+                code, modifiers, ..
+            } => {
                 let key_code = parse_key_code(code);
                 self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
                 self.key_action(key_code, Direction::Release)
             }
-            InputEvent::MouseMove { dx, dy, modifiers, .. } => {
+            InputEvent::MouseMove {
+                dx, dy, modifiers, ..
+            } => {
                 self.sync_modifiers(modifiers, None)?;
                 self.move_mouse(*dx, *dy)
             }
-            InputEvent::MouseButtonDown { button, modifiers, .. } => {
+            InputEvent::MouseButtonDown {
+                button, modifiers, ..
+            } => {
                 self.sync_modifiers(modifiers, None)?;
                 self.button_action(*button, Direction::Press)
             }
-            InputEvent::MouseButtonUp { button, modifiers, .. } => {
+            InputEvent::MouseButtonUp {
+                button, modifiers, ..
+            } => {
                 self.sync_modifiers(modifiers, None)?;
                 self.button_action(*button, Direction::Release)
             }
@@ -141,9 +151,8 @@ impl NativeInputSink {
 
     fn record_loopback(&mut self, event: &InputEvent) {
         if let Some(loopback) = &self.loopback {
-            if let Ok(mut loopback) = loopback.lock() {
-                loopback.record(event.clone());
-            }
+            let mut loopback = lock_recovering(loopback);
+            loopback.record(event.clone());
         }
     }
 
@@ -353,7 +362,10 @@ impl NativeInputSink {
                 }
             }
             Some(DockProxyAction::Hide) => {
-                if self.dock_visible && self.dock_hide_is_allowed() && self.trigger_macos_dock_hide()? {
+                if self.dock_visible
+                    && self.dock_hide_is_allowed()
+                    && self.trigger_macos_dock_hide()?
+                {
                     self.dock_visible = false;
                     debug!(
                         platform = self.platform,
@@ -606,8 +618,8 @@ fn keycode_to_event_flag(keycode: CGKeyCode) -> CGEventFlags {
     match keycode {
         LEFT_COMMAND_KEYCODE => CGEventFlags::CGEventFlagCommand,
         LEFT_OPTION_KEYCODE => CGEventFlags::CGEventFlagAlternate,
-        0x38 => CGEventFlags::CGEventFlagShift,    // Left Shift
-        0x3B => CGEventFlags::CGEventFlagControl,   // Left Control
+        0x38 => CGEventFlags::CGEventFlagShift, // Left Shift
+        0x3B => CGEventFlags::CGEventFlagControl, // Left Control
         _ => CGEventFlags::CGEventFlagNull,
     }
 }
@@ -650,7 +662,11 @@ fn dock_proxy_transition(
 }
 
 #[cfg(target_os = "macos")]
-fn post_macos_key_event(keycode: CGKeyCode, key_down: bool, flags: CGEventFlags) -> Result<(), String> {
+fn post_macos_key_event(
+    keycode: CGKeyCode,
+    key_down: bool,
+    flags: CGEventFlags,
+) -> Result<(), String> {
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| "failed to create macOS event source for keyboard event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)

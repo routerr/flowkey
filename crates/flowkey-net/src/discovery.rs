@@ -41,7 +41,11 @@ pub struct DiscoveredPeer {
     pub pairing_port: Option<u16>,
 }
 
-pub fn advertise(config: &Config, is_pairing: bool, pairing_port: Option<u16>) -> Result<DiscoveryAdvertisement> {
+pub fn advertise(
+    config: &Config,
+    is_pairing: bool,
+    pairing_port: Option<u16>,
+) -> Result<DiscoveryAdvertisement> {
     let advertised_addr = config
         .advertised_listen_addr()
         .context("failed to derive advertised listen address for discovery")?;
@@ -60,7 +64,10 @@ pub fn advertise(config: &Config, is_pairing: bool, pairing_port: Option<u16>) -
     let mut properties = vec![
         (PROPERTY_NODE_ID, config.node.id.as_str()),
         (PROPERTY_NODE_NAME, config.node.name.as_str()),
-        (PROPERTY_IS_PAIRING, if is_pairing { "true" } else { "false" }),
+        (
+            PROPERTY_IS_PAIRING,
+            if is_pairing { "true" } else { "false" },
+        ),
         ("ips", routable_ips.as_str()),
     ];
 

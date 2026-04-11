@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::event::InputEvent;
+use tracing::warn;
 
 #[derive(Debug)]
 pub struct LoopbackSuppressor {
@@ -17,6 +18,19 @@ struct RecordedEvent {
 }
 
 pub type SharedLoopbackSuppressor = Arc<Mutex<LoopbackSuppressor>>;
+
+pub fn lock_recovering<'a>(
+    shared: &'a SharedLoopbackSuppressor,
+) -> MutexGuard<'a, LoopbackSuppressor> {
+    match shared.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            warn!(target: "loopback", "poisoned mutex, recovering");
+            shared.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
 
 impl LoopbackSuppressor {
     pub fn shared(window: Duration) -> SharedLoopbackSuppressor {
@@ -74,7 +88,7 @@ mod tests {
 
     use crate::event::{InputEvent, Modifiers, MouseButton};
 
-    use super::LoopbackSuppressor;
+    use super::{lock_recovering, LoopbackSuppressor};
 
     #[test]
     fn suppresses_recently_recorded_events_exactly_once() {
@@ -118,5 +132,34 @@ mod tests {
         suppressor.record(injected);
 
         assert!(!suppressor.should_suppress(&captured));
+    }
+
+    #[test]
+    fn recovers_from_poisoned_mutex() {
+        let shared = LoopbackSuppressor::shared(Duration::from_secs(1));
+        let event = InputEvent::MouseButtonDown {
+            button: MouseButton::Left,
+            modifiers: Modifiers::none(),
+            timestamp_us: 0,
+        };
+
+        let poison = std::panic::catch_unwind({
+            let shared = shared.clone();
+            move || {
+                let _guard = shared.lock().unwrap();
+                panic!("poison the loopback mutex");
+            }
+        });
+        assert!(poison.is_err());
+        assert!(shared.lock().is_err());
+
+        {
+            let mut suppressor = lock_recovering(&shared);
+            suppressor.record(event.clone());
+        }
+
+        assert!(shared.lock().is_ok());
+        let mut suppressor = shared.lock().unwrap();
+        assert!(suppressor.should_suppress(&event));
     }
 }
