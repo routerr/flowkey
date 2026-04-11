@@ -30,8 +30,11 @@ if [ "$PLATFORM" == "windows" ]; then
     # Inject common Windows paths if missing. Prioritize Winget Node.js to avoid MSYS2/Rolldown binding bugs.
     export PATH="/c/Users/user/AppData/Local/Microsoft/WinGet/Packages/OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe/node-v24.14.0-win-x64:$HOME/.cargo/bin:/c/msys64/ucrt64/bin:$PATH"
     
-    # Use /tmp for target dir to bypass Windows Defender file locking on build scripts
+    # Use /tmp for target dir to bypass Windows Defender file locking on build scripts.
+    # Keep the directory stable within the run so cleanup and artifact collection
+    # can target the same location, but clear any stale bundle outputs first.
     export CARGO_TARGET_DIR="/tmp/cargo_target_flowkey"
+    rm -rf "$CARGO_TARGET_DIR/release/bundle" "$CARGO_TARGET_DIR/release/.fingerprint"
 
     NPM="npm.cmd"
     NPX="npx.cmd"
