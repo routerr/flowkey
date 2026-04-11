@@ -45,10 +45,15 @@ Completed since this backlog was written:
   Windows firewall rule and macOS signing / notarization hooks.
 - Task C3: auto-start and remote-control settings are exposed in the GUI and
   persisted through the autostart plugin / config.
+- Task C4: `native_injector.rs` is split so macOS-specific cursor logic now
+  lives behind the macOS platform module.
+- Task C5: repo hygiene now ignores `.DS_Store` recursively and removes the
+  tracked root `.DS_Store` entry from the index.
 
 Current next step:
 
-- Task C4: Refactor `native_injector.rs`.
+- No required backlog steps remain; continue with optional future work if
+  desired.
 
 ---
 
@@ -670,6 +675,12 @@ crates.
     injector module.
   - `cargo test -p flowkey-input` still passes.
 
+**Status**: complete.
+
+### Task C4 status
+
+**Status**: complete.
+
 ---
 
 ### Task C5 — Repo hygiene
@@ -683,12 +694,20 @@ crates.
   2. `git rm --cached .DS_Store` and `crates/.DS_Store` if tracked.
 - **Acceptance criteria**: `git status` shows no `.DS_Store` entries.
 
+**Status**: complete.
+
 #### Subtask C5.2 — README refresh
 
 - **Edit plan**: Replace the outdated "Suggested Next Steps" section of
   `README.md` with a pointer to this backlog and remove items 1–5 which are
   already done.
 - **Acceptance criteria**: README accurately reflects the current state.
+
+**Status**: complete.
+
+### Task C5 status
+
+**Status**: complete.
 
 ---
 

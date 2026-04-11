@@ -282,8 +282,7 @@ What now also works:
 
 ## Suggested Next Steps
 
-1. Implement config loading in `flowkey-config`
-2. Define protocol messages in `flowkey-protocol`
-3. Wire daemon state in `flowkey-core`
-4. Add pairing primitives in `flowkey-crypto`
-5. Build one-platform end-to-end proof before full cross-platform polish
+The current implementation backlog lives in
+[`docs/work-backlog-2026-04-11.md`](docs/work-backlog-2026-04-11.md). That
+document is the source of truth for the remaining engineering steps and their
+acceptance criteria.
