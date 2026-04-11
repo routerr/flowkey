@@ -29,6 +29,10 @@ if [ "$PLATFORM" == "windows" ]; then
 
     # Inject common Windows paths if missing. Prioritize Winget Node.js to avoid MSYS2/Rolldown binding bugs.
     export PATH="/c/Users/user/AppData/Local/Microsoft/WinGet/Packages/OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe/node-v24.14.0-win-x64:$HOME/.cargo/bin:/c/msys64/ucrt64/bin:$PATH"
+    
+    # Use /tmp for target dir to bypass Windows Defender file locking on build scripts
+    export CARGO_TARGET_DIR="/tmp/cargo_target_flowkey"
+
     NPM="npm.cmd"
     NPX="npx.cmd"
     TAURI_BIN="frontend/node_modules/.bin/tauri.cmd"
@@ -99,14 +103,16 @@ if [ "$PLATFORM" == "macos" ]; then
     fi
 
 elif [ "$PLATFORM" == "windows" ]; then
+    TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+    
     # On Windows, look for .exe
-    if [ -f "target/release/flowkey-gui.exe" ]; then
-        cp "target/release/flowkey-gui.exe" dist/flowkey.exe
+    if [ -f "$TARGET_DIR/release/flowkey-gui.exe" ]; then
+        cp "$TARGET_DIR/release/flowkey-gui.exe" dist/flowkey.exe
         echo "Portable executable created: dist/flowkey.exe"
     fi
     
     # Look for installer if generated
-    SEARCH_DIR="target/release/bundle/msi"
+    SEARCH_DIR="$TARGET_DIR/release/bundle/msi"
     if [ -d "$SEARCH_DIR" ]; then
         MSI_PATH=$(find "$SEARCH_DIR" -maxdepth 1 -name "*.msi" | head -n 1)
         if [ -n "$MSI_PATH" ]; then
