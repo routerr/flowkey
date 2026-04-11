@@ -18,6 +18,23 @@ Conventions:
 - **Owner hint**: which rules/skills to consult (`rust-reviewer`,
   `tdd-guide`, etc.).
 
+## Progress Update
+
+Completed since this backlog was written:
+
+- Task A1.2 and A1.3: Windows named pipe control channel now exists in the
+  daemon and CLI.
+- Task A2.1, A2.2, and A2.3: Windows `uiAccess` manifest, interactive-session
+  fail-fast, and setup docs are in place.
+- Task A3.1, A3.2, and A3.3: supervised daemon lifecycle in the GUI, clean
+  shutdown, and loopback poison recovery are implemented.
+- Task A4.1: pairing now persists the observed remote address.
+
+Current next step:
+
+- Task B2.1: implement `HeldKeyTracker` so disconnects and release paths can
+  always flush held modifiers/buttons deterministically.
+
 ---
 
 ## Phase A — Stabilize Windows & GUI
@@ -28,6 +45,10 @@ Exit this phase with a daemon that a non-expert user can run via the GUI on
 either platform without manual recovery.
 
 ### Task A1 — Windows Named Pipe IPC parity
+
+**Status**: part complete. The control channel now uses a Windows named pipe
+and macOS UDS, but the abstract `ControlTransport` refactor in A1.1 is still
+open if we want to consolidate the code paths later.
 
 **Goal**: Replace the 150ms TOML file-poll loop on Windows with a Named Pipe
 listener, achieving the same sub-10ms `flky switch` latency macOS already has
@@ -64,6 +85,8 @@ via UDS.
   - No call site still references `DaemonCommand::save_to_path` on the hot
     path.
 
+**Status**: open.
+
 #### Subtask A1.2 — Windows Named Pipe server
 
 - **Goal**: Implement a `NamedPipeServer` branch for the daemon that accepts
@@ -84,6 +107,8 @@ via UDS.
     restarting the CLI.
   - The 150ms polling fallback is removed from the Windows branch.
 
+**Status**: complete.
+
 #### Subtask A1.3 — Windows CLI client
 
 - **Goal**: Make the CLI connect to the Named Pipe when running on Windows.
@@ -96,9 +121,13 @@ via UDS.
   - `cargo test -p flowkey-cli` passes.
   - Manual: `flky switch` prints "sent via pipe" log line on Windows.
 
+**Status**: complete.
+
 ---
 
 ### Task A2 — Windows `uiAccess` manifest & fail-fast startup
+
+**Status**: complete.
 
 **Goal**: Allow the Windows daemon to inject into elevated windows (Task
 Manager, signed apps) and stop the silent exit when the daemon is launched
@@ -129,6 +158,8 @@ outside an interactive desktop session.
   - Unsigned debug builds continue to run (uiAccess silently downgraded) so
     local development is not blocked.
 
+**Status**: complete.
+
 #### Subtask A2.2 — Fail-fast on non-interactive session
 
 - **Goal**: When the daemon is launched via SSH or `Start-Process` and the
@@ -151,6 +182,8 @@ outside an interactive desktop session.
   - `flky doctor` on Windows reports "interactive session: required / not
     detected" when applicable.
 
+**Status**: complete.
+
 #### Subtask A2.3 — Operator docs
 
 - **Goal**: Update README and setup guide with the UIPI requirement, signing
@@ -163,9 +196,13 @@ outside an interactive desktop session.
   - A new reader can follow the README to run the daemon against an elevated
     window without external research.
 
+**Status**: complete.
+
 ---
 
 ### Task A3 — Supervised daemon inside the GUI
+
+**Status**: complete.
 
 **Goal**: Make the Tauri GUI resilient to daemon panics, give the GUI a proper
 handle to the daemon (with shutdown), and formalize the uncommitted
@@ -197,6 +234,8 @@ panic/mutex hardening.
     verifies the supervisor restarts exactly once and then continues.
   - `DaemonHandle::shutdown()` cancels within 200ms.
 
+**Status**: complete.
+
 #### Subtask A3.2 — GUI adopts the supervisor
 
 - **Goal**: Replace the ad-hoc `tauri::async_runtime::spawn(run_daemon(...))`
@@ -214,6 +253,8 @@ panic/mutex hardening.
   - Forcing a panic in the daemon restarts it automatically while the GUI
     stays responsive.
 
+**Status**: complete.
+
 #### Subtask A3.3 — Harden loopback poison handling
 
 - **Goal**: Commit the uncommitted mutex-poison guards, but add warnings and
@@ -230,9 +271,13 @@ panic/mutex hardening.
     log and the next event is processed normally.
   - Manual soak: 30 minutes of heavy mouse movement shows zero warn logs.
 
+**Status**: complete.
+
 ---
 
 ### Task A4 — Persist pairing peer addresses
+
+**Status**: complete.
 
 **Goal**: Stop relying on mDNS to resolve a peer's address after pairing.
 
@@ -258,6 +303,8 @@ panic/mutex hardening.
     peer.
   - Reconnect works even after disabling mDNS (tested by blocking UDP 5353
     temporarily).
+
+**Status**: complete.
 
 ---
 
