@@ -256,14 +256,28 @@ pub(crate) fn create_platform_input_capture(
         let note = match capture_mode {
             CaptureMode::Passive => None,
             CaptureMode::Exclusive => Some(
-                "exclusive capture mode enabled; local hotkey listener suppresses mirrored input"
+                "exclusive capture mode enabled; local input is suppressed while controlling"
                     .to_string(),
             ),
         };
-        let capture =
-            flowkey_input::capture::LocalInputCapture::with_loopback(binding, Some(loopback));
+        let capture: Box<dyn InputCapture> = match capture_mode {
+            CaptureMode::Exclusive => Box::new(
+                flowkey_platform_windows::capture::WindowsExclusiveCapture::with_loopback(
+                    binding,
+                    Some(loopback),
+                    _suppression_state,
+                ),
+            ),
+            CaptureMode::Passive => Box::new(
+                flowkey_platform_windows::capture::WindowsCapture::with_loopback(
+                    binding,
+                    Some(loopback),
+                    _suppression_state,
+                ),
+            ),
+        };
         let restart_counter = capture.capture_restart_counter();
-        return (Box::new(capture), note, restart_counter);
+        return (capture, note, restart_counter);
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

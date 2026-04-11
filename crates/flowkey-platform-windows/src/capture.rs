@@ -1,7 +1,8 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use flowkey_input::capture::{CaptureSignal, CaptureState, InputCapture, LocalInputCapture};
 use flowkey_input::event::InputEvent;
@@ -24,6 +25,7 @@ pub struct WindowsExclusiveCapture {
     receiver: Option<Receiver<CaptureSignal>>,
     suppression_enabled: Arc<AtomicBool>,
     started: bool,
+    restart_count: Arc<AtomicU64>,
 }
 
 impl WindowsCapture {
@@ -74,6 +76,7 @@ impl WindowsExclusiveCapture {
             receiver: None,
             suppression_enabled,
             started: false,
+            restart_count: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -88,89 +91,50 @@ impl InputCapture for WindowsExclusiveCapture {
         let binding = self.binding.clone();
         let loopback = self.loopback.clone();
         let suppression_enabled = Arc::clone(&self.suppression_enabled);
+        let restart_count = Arc::clone(&self.restart_count);
         self.receiver = Some(receiver);
         self.started = true;
 
         thread::spawn(move || {
-            let tracker = Arc::new(Mutex::new(HotkeyTracker::new(binding)));
-            let state = Arc::new(Mutex::new(CaptureState::default()));
-            let pending_recenter = Arc::new(Mutex::new(None::<(f64, f64)>));
+            let backoff = [
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(5),
+                Duration::from_secs(10),
+            ];
+            let mut backoff_index = 0usize;
 
-            let grab_tracker = Arc::clone(&tracker);
-            let grab_state = Arc::clone(&state);
-            let grab_pending_recenter = Arc::clone(&pending_recenter);
-            let result = rdev::grab(move |event: rdev::Event| {
-                if consume_pending_recenter_event(
-                    &event,
-                    &mut grab_pending_recenter.lock().unwrap(),
-                ) {
-                    return None;
-                }
+            loop {
+                let result = spawn_grab_thread(
+                    binding.clone(),
+                    loopback.clone(),
+                    Arc::clone(&suppression_enabled),
+                    sender.clone(),
+                )
+                .join();
 
-                let mut tracker = grab_tracker.lock().unwrap();
-                let mut state = grab_state.lock().unwrap();
-
-                let saved_mouse_position = state.last_mouse_position;
-                let signal = state.translate(event.clone(), &mut tracker, loopback.as_ref());
-                if let Some(signal) = signal {
-                    match signal {
-                        CaptureSignal::HotkeyPressed => {
-                            let _ = sender.send(signal);
-                            Some(event)
-                        }
-                        CaptureSignal::HotkeySuppressed => {
-                            // Don't forward hotkey releases over the network, but ALWAYS pass them
-                            // to the local OS to prevent modifier keys from getting stuck when releasing control.
-                            Some(event)
-                        }
-                        CaptureSignal::Input(input) => {
-                            let _ = sender.send(CaptureSignal::Input(input.clone()));
-                            if suppression_enabled.load(Ordering::SeqCst) {
-                                if matches!(input, InputEvent::MouseMove { .. }) {
-                                    if let Some(center) = recenter_cursor_to_virtual_center() {
-                                        if let InputEvent::MouseMove { dx, dy, .. } = input {
-                                            debug!(
-                                                dx,
-                                                dy,
-                                                center_x = center.0,
-                                                center_y = center.1,
-                                                "recentering suppressed Windows cursor after forwarded mouse move"
-                                            );
-                                        }
-                                        state.last_mouse_position = Some(center);
-                                        *grab_pending_recenter.lock().unwrap() = Some(center);
-                                    } else {
-                                        // Fall back to the old behavior if we fail to recenter.
-                                        if let InputEvent::MouseMove { dx, dy, .. } = input {
-                                            debug!(
-                                                dx,
-                                                dy,
-                                                "failed to recenter suppressed Windows cursor; preserving previous baseline"
-                                            );
-                                        }
-                                        state.last_mouse_position = saved_mouse_position;
-                                    }
-                                } else {
-                                    // The OS cursor stays in place for suppressed non-mouse-move
-                                    // events, so preserve the pre-event coordinate baseline.
-                                    state.last_mouse_position = saved_mouse_position;
-                                }
-                                None
-                            } else {
-                                Some(event)
-                            }
-                        }
+                match result {
+                    Ok(()) => {}
+                    Err(panic_info) => {
+                        warn!(error = ?panic_info, "Windows exclusive capture (grab) panicked");
                     }
-                } else {
-                    // Event was suppressed by loopback (it was injected by us).
-                    // Don't forward it over the network, but DO pass it through
-                    // to the OS so the injection actually takes effect.
-                    Some(event)
                 }
-            });
 
-            if let Err(error) = result {
-                warn!(error = ?error, "Windows exclusive capture (grab) stopped");
+                if sender.send(CaptureSignal::HotkeySuppressed).is_err() {
+                    // Receiver dropped — the capture was stopped intentionally.
+                    break;
+                }
+
+                restart_count.fetch_add(1, Ordering::SeqCst);
+                let delay = backoff[backoff_index];
+                if backoff_index + 1 < backoff.len() {
+                    backoff_index += 1;
+                }
+                warn!(
+                    restart = restart_count.load(Ordering::SeqCst),
+                    "Windows exclusive capture restarting"
+                );
+                thread::sleep(delay);
             }
         });
 
@@ -192,6 +156,100 @@ impl InputCapture for WindowsExclusiveCapture {
     fn set_suppression_enabled(&mut self, enabled: bool) {
         self.suppression_enabled.store(enabled, Ordering::SeqCst);
     }
+
+    fn capture_restart_counter(&self) -> Option<Arc<AtomicU64>> {
+        Some(Arc::clone(&self.restart_count))
+    }
+}
+
+fn spawn_grab_thread(
+    binding: HotkeyBinding,
+    loopback: Option<SharedLoopbackSuppressor>,
+    suppression_enabled: Arc<AtomicBool>,
+    sender: mpsc::Sender<CaptureSignal>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let tracker = Arc::new(Mutex::new(HotkeyTracker::new(binding)));
+        let state = Arc::new(Mutex::new(CaptureState::default()));
+        let pending_recenter = Arc::new(Mutex::new(None::<(f64, f64)>));
+
+        let grab_tracker = Arc::clone(&tracker);
+        let grab_state = Arc::clone(&state);
+        let grab_pending_recenter = Arc::clone(&pending_recenter);
+        let result = rdev::grab(move |event: rdev::Event| {
+            if consume_pending_recenter_event(
+                &event,
+                &mut grab_pending_recenter.lock().unwrap(),
+            ) {
+                return None;
+            }
+
+            let mut tracker = grab_tracker.lock().unwrap();
+            let mut state = grab_state.lock().unwrap();
+
+            let saved_mouse_position = state.last_mouse_position;
+            let signal = state.translate(event.clone(), &mut tracker, loopback.as_ref());
+            if let Some(signal) = signal {
+                match signal {
+                    CaptureSignal::HotkeyPressed => {
+                        let _ = sender.send(signal);
+                        Some(event)
+                    }
+                    CaptureSignal::HotkeySuppressed => {
+                        // Don't forward hotkey releases over the network, but ALWAYS pass them
+                        // to the local OS to prevent modifier keys from getting stuck when releasing control.
+                        Some(event)
+                    }
+                    CaptureSignal::Input(input) => {
+                        let _ = sender.send(CaptureSignal::Input(input.clone()));
+                        if suppression_enabled.load(Ordering::SeqCst) {
+                            if matches!(input, InputEvent::MouseMove { .. }) {
+                                if let Some(center) = recenter_cursor_to_virtual_center() {
+                                    if let InputEvent::MouseMove { dx, dy, .. } = input {
+                                        debug!(
+                                            dx,
+                                            dy,
+                                            center_x = center.0,
+                                            center_y = center.1,
+                                            "recentering suppressed Windows cursor after forwarded mouse move"
+                                        );
+                                    }
+                                    state.last_mouse_position = Some(center);
+                                    *grab_pending_recenter.lock().unwrap() = Some(center);
+                                } else {
+                                    // Fall back to the old behavior if we fail to recenter.
+                                    if let InputEvent::MouseMove { dx, dy, .. } = input {
+                                        debug!(
+                                            dx,
+                                            dy,
+                                            "failed to recenter suppressed Windows cursor; preserving previous baseline"
+                                        );
+                                    }
+                                    state.last_mouse_position = saved_mouse_position;
+                                }
+                            } else {
+                                // The OS cursor stays in place for suppressed non-mouse-move
+                                // events, so preserve the pre-event coordinate baseline.
+                                state.last_mouse_position = saved_mouse_position;
+                            }
+                            None
+                        } else {
+                            Some(event)
+                        }
+                    }
+                }
+            } else {
+                // Event was suppressed by loopback (it was injected by us).
+                // Don't forward it over the network, but DO pass it through
+                // to the OS so the injection actually takes effect.
+                Some(event)
+            }
+        });
+
+        if let Err(error) = result {
+            warn!(error = ?error, "Windows exclusive capture (grab) stopped");
+        }
+    })
 }
 
 fn consume_pending_recenter_event(
