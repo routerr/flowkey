@@ -6,6 +6,8 @@ use flowkey_crypto::{HandshakeOffer, NodeIdentity};
 use flowkey_daemon::run_daemon;
 use std::path::Path;
 use std::time::Duration;
+#[cfg(target_os = "windows")]
+use tokio::net::windows::named_pipe::ClientOptions;
 use tokio::net::TcpListener;
 #[cfg(target_os = "macos")]
 use tokio::net::UnixStream;
@@ -167,6 +169,8 @@ async fn main() -> Result<()> {
             }
         }
         Command::Switch { peer_id } => {
+            #[cfg(target_os = "windows")]
+            let config = Config::load_or_default()?;
             let control_path = Config::control_path()?;
             let socket_path = control_path.with_extension("sock");
             let mut sent_via_socket = false;
@@ -191,6 +195,23 @@ async fn main() -> Result<()> {
                 }
             }
 
+            #[cfg(target_os = "windows")]
+            {
+                let pipe_name = config.control_pipe_name();
+                match ClientOptions::new().open(&pipe_name) {
+                    Ok(mut pipe) => {
+                        if let Ok(()) = DaemonCommand::switch(&peer_id).send_to(&mut pipe).await {
+                            info!(%peer_id, pipe = %pipe_name, "sent switch request to daemon pipe");
+                            println!("switch request sent to daemon");
+                            sent_via_socket = true;
+                        }
+                    }
+                    Err(error) => {
+                        warn!(%error, pipe = %pipe_name, "failed to open daemon control pipe");
+                    }
+                }
+            }
+
             if !sent_via_socket {
                 DaemonCommand::switch(&peer_id).save_to_path(&control_path)?;
                 info!(%peer_id, path = %control_path.display(), "queued switch request via file");
@@ -198,6 +219,8 @@ async fn main() -> Result<()> {
             }
         }
         Command::Release => {
+            #[cfg(target_os = "windows")]
+            let config = Config::load_or_default()?;
             let control_path = Config::control_path()?;
             let socket_path = control_path.with_extension("sock");
             let mut sent_via_socket = false;
@@ -216,6 +239,23 @@ async fn main() -> Result<()> {
                         Err(_) => {
                             // Daemon might not be running or socket is stale
                         }
+                    }
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                let pipe_name = config.control_pipe_name();
+                match ClientOptions::new().open(&pipe_name) {
+                    Ok(mut pipe) => {
+                        if let Ok(()) = DaemonCommand::release().send_to(&mut pipe).await {
+                            info!(path = %pipe_name, "sent release request to daemon pipe");
+                            println!("release request sent to daemon");
+                            sent_via_socket = true;
+                        }
+                    }
+                    Err(error) => {
+                        warn!(%error, pipe = %pipe_name, "failed to open daemon control pipe");
                     }
                 }
             }

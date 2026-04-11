@@ -23,6 +23,8 @@ use flowkey_net::connection::{
 };
 use flowkey_net::discovery::DiscoveryAdvertisement;
 use flowkey_net::heartbeat::HeartbeatConfig;
+#[cfg(target_os = "windows")]
+use tokio::net::windows::named_pipe::ServerOptions;
 use tokio::net::TcpListener;
 #[cfg(target_os = "macos")]
 use tokio::net::UnixListener;
@@ -119,6 +121,7 @@ pub(crate) async fn run_daemon_with_shutdown(
         Arc::clone(&runtime),
         Arc::clone(&session_senders),
         control_path.clone(),
+        config.control_pipe_name(),
         status_path.clone(),
         Arc::clone(&suppression_state),
     );
@@ -579,6 +582,7 @@ fn spawn_control_watcher(
     runtime: Arc<Mutex<DaemonRuntime>>,
     session_senders: Arc<Mutex<HashMap<String, SessionSender>>>,
     control_path: PathBuf,
+    _control_pipe_name: String,
     status_path: PathBuf,
     suppression_state: Arc<AtomicBool>,
 ) {
@@ -603,21 +607,16 @@ fn spawn_control_watcher(
                                     let suppression_state = Arc::clone(&suppression_state);
 
                                     tokio::spawn(async move {
-                                        match DaemonCommand::read_from(&mut stream).await {
-                                            Ok(command) => {
-                                                if let Err(error) = handle_control_command(
-                                                    command,
-                                                    &runtime,
-                                                    &session_senders,
-                                                    &status_path,
-                                                    &suppression_state,
-                                                ) {
-                                                    warn!(%error, "failed to handle daemon control command");
-                                                }
-                                            }
-                                            Err(error) => {
-                                                warn!(%error, "failed to read daemon control command from socket");
-                                            }
+                                        if let Err(error) = handle_control_stream(
+                                            &mut stream,
+                                            &runtime,
+                                            &session_senders,
+                                            &status_path,
+                                            &suppression_state,
+                                        )
+                                        .await
+                                        {
+                                            warn!(%error, "failed to handle daemon control command");
                                         }
                                     });
                                 }
@@ -636,7 +635,57 @@ fn spawn_control_watcher(
             }
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let mut first_instance = true;
+            loop {
+                let builder = if first_instance {
+                    first_instance = false;
+                    ServerOptions::new().first_pipe_instance(true)
+                } else {
+                    ServerOptions::new()
+                };
+
+                let mut pipe = match builder.create(&_control_pipe_name) {
+                    Ok(pipe) => {
+                        info!(pipe = %_control_pipe_name, "daemon control pipe listening");
+                        pipe
+                    }
+                    Err(error) => {
+                        error!(%error, pipe = %_control_pipe_name, "failed to create daemon control pipe; retrying in 1s");
+                        sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                };
+
+                if let Err(error) = pipe.connect().await {
+                    warn!(%error, pipe = %_control_pipe_name, "failed to accept daemon control pipe client");
+                    sleep(Duration::from_millis(150)).await;
+                    continue;
+                }
+
+                let runtime = Arc::clone(&runtime);
+                let session_senders = Arc::clone(&session_senders);
+                let status_path = status_path.clone();
+                let suppression_state = Arc::clone(&suppression_state);
+
+                tokio::spawn(async move {
+                    if let Err(error) = handle_control_stream(
+                        &mut pipe,
+                        &runtime,
+                        &session_senders,
+                        &status_path,
+                        &suppression_state,
+                    )
+                    .await
+                    {
+                        warn!(%error, "failed to handle daemon control pipe command");
+                    }
+                });
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             loop {
                 if !control_path.exists() {
@@ -669,6 +718,28 @@ fn spawn_control_watcher(
             }
         }
     });
+}
+
+async fn handle_control_stream<S>(
+    stream: &mut S,
+    runtime: &Arc<Mutex<DaemonRuntime>>,
+    session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
+    status_path: &std::path::Path,
+    suppression_state: &Arc<AtomicBool>,
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
+    let command = DaemonCommand::read_from(stream)
+        .await
+        .map_err(|error| error.to_string())?;
+    handle_control_command(
+        command,
+        runtime,
+        session_senders,
+        status_path,
+        suppression_state,
+    )
 }
 
 fn handle_control_command(

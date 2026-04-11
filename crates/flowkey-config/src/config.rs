@@ -259,6 +259,10 @@ impl Config {
         Ok(control_path_for_config_path(&config_path))
     }
 
+    pub fn control_pipe_name(&self) -> String {
+        format!(r"\\.\pipe\flowkey-{}", normalize_id(&self.node.id))
+    }
+
     pub fn log_dir() -> Result<PathBuf> {
         let config_path = Self::default_path()?;
         Ok(log_dir_for_config_path(&config_path))
@@ -576,6 +580,14 @@ hotkey = "Ctrl+Alt+Shift+K"
         let control_path = control_path_for_config_path(&config_path);
 
         assert_eq!(control_path, PathBuf::from("/tmp/flowkey/control.toml"));
+    }
+
+    #[test]
+    fn control_pipe_name_uses_normalized_node_id() {
+        let mut config = Config::default();
+        config.node.id = "My Work PC".to_string();
+
+        assert_eq!(config.control_pipe_name(), r"\\.\pipe\flowkey-my-work-pc");
     }
 
     #[test]
