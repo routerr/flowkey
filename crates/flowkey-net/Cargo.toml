@@ -15,6 +15,7 @@ tokio.workspace = true
 crossbeam-channel.workspace = true
 rand.workspace = true
 flowkey-config = { path = "../flowkey-config" }
+flowkey-core = { path = "../flowkey-core" }
 flowkey-crypto = { path = "../flowkey-crypto" }
 flowkey-input = { path = "../flowkey-input" }
 flowkey-protocol = { path = "../flowkey-protocol" }

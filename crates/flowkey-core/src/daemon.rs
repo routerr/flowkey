@@ -21,6 +21,7 @@ pub enum DaemonState {
 pub struct RuntimeDiagnostics {
     pub local_capture_enabled: bool,
     pub input_injection_backend: String,
+    pub capture_restarts: u64,
     pub notes: Vec<String>,
 }
 
@@ -29,6 +30,7 @@ impl Default for RuntimeDiagnostics {
         Self {
             local_capture_enabled: false,
             input_injection_backend: "unconfigured".to_string(),
+            capture_restarts: 0,
             notes: Vec::new(),
         }
     }

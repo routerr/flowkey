@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <CustomAction
+      Id="FlowkeyFirewallRuleData"
+      Property="FlowkeyFirewallRule"
+      Value="[REMOVE]"
+    />
+
+    <CustomAction
+      Id="FlowkeyFirewallRule"
+      Script="vbscript"
+      Execute="deferred"
+      Return="check"
+      Impersonate="no"
+    >
+      <![CDATA[
+Option Explicit
+
+Dim mode
+mode = UCase(Session.Property("CustomActionData"))
+
+Dim shell
+Set shell = CreateObject("WScript.Shell")
+
+Dim deleteCommand
+deleteCommand = "cmd.exe /c netsh advfirewall firewall delete rule name=""flowkey"""
+shell.Run deleteCommand, 0, True
+
+If mode <> "ALL" Then
+  Dim addCommand
+  addCommand = "cmd.exe /c netsh advfirewall firewall add rule name=""flowkey"" dir=in action=allow protocol=TCP localport=48571"
+  If shell.Run(addCommand, 0, True) <> 0 Then
+    Err.Raise vbObjectError + 1, "FlowkeyFirewallRule", "failed to add the flowkey firewall rule"
+  End If
+End If
+      ]]>
+    </CustomAction>
+
+    <InstallExecuteSequence>
+      <Custom Action="FlowkeyFirewallRuleData" Before="FlowkeyFirewallRule">1</Custom>
+      <Custom Action="FlowkeyFirewallRule" Before="InstallFinalize">1</Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

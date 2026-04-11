@@ -125,8 +125,11 @@ Tagged releases are also packaged automatically by `.github/workflows/package.ym
 Release outputs are currently:
 
 - Linux: `tar.gz` bundle plus SHA-256 checksum
-- macOS: `.dmg` app bundle plus SHA-256 checksum
-- Windows: `.zip` bundle with `install.ps1` plus SHA-256 checksum
+- macOS: `.dmg` app bundle plus SHA-256 checksum; set `FLKY_MACOS_SIGN_IDENTITY`, `FLKY_MACOS_NOTARY_APPLE_ID`, `FLKY_MACOS_NOTARY_PASSWORD`, and `FLKY_MACOS_NOTARY_TEAM_ID` to sign and notarize the image
+- Windows: `.msi` installer plus `.zip` bundle with `install.ps1`, each with SHA-256 checksum
+
+Windows installers are produced by the Tauri bundle path, and the MSI includes the
+Firewall rule needed for TCP port `48571`.
 
 ### Run Help
 

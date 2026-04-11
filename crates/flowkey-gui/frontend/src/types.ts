@@ -33,11 +33,17 @@ export interface Config {
   peers: PeerConfig[];
 }
 
+export interface PermissionStatus {
+  accessibility: boolean;
+  input_monitoring: boolean;
+}
+
 export interface DaemonStatus {
   state: string;
   active_peer_id?: string;
   session_healthy: boolean;
   local_capture_enabled: boolean;
+  capture_restarts: number;
   input_injection_backend: string;
   notes: string[];
 }

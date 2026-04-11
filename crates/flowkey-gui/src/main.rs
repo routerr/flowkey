@@ -7,6 +7,7 @@ use flowkey_config::Config;
 use flowkey_daemon::{spawn_supervised, DaemonHandle};
 use flowkey_net::discovery::{DiscoveredPeer, DiscoveryAdvertisement};
 use flowkey_net::pairing::{initiate_pairing_client, run_pairing_listener, PairingProposal};
+use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{
@@ -21,6 +22,12 @@ struct AppState {
     daemon: Arc<Mutex<Option<Arc<DaemonHandle>>>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct PermissionStatusView {
+    accessibility: bool,
+    input_monitoring: bool,
+}
+
 #[tauri::command]
 async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
     let config = Config::load_or_default().map_err(|e| e.to_string())?;
@@ -31,6 +38,37 @@ async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
 #[tauri::command]
 async fn get_config() -> Result<Config, String> {
     Config::load_or_default().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_permission_status() -> Result<PermissionStatusView, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = flowkey_platform_macos::permissions::PermissionStatus::probe();
+        Ok(PermissionStatusView {
+            accessibility: status.accessibility,
+            input_monitoring: status.input_monitoring,
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(PermissionStatusView {
+            accessibility: true,
+            input_monitoring: true,
+        })
+    }
+}
+
+#[tauri::command]
+async fn open_permissions() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        flowkey_platform_macos::permissions::PermissionStatus::open_accessibility_pane()?;
+        flowkey_platform_macos::permissions::PermissionStatus::open_input_monitoring_pane()?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -278,6 +316,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_discovered_peers,
             get_config,
+            get_permission_status,
+            open_permissions,
             enter_pairing_mode,
             connect_to_peer,
             confirm_pairing,

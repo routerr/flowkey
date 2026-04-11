@@ -40,6 +40,26 @@ impl PermissionStatus {
 
         notes
     }
+
+    #[cfg(target_os = "macos")]
+    pub fn open_accessibility_pane() -> Result<(), String> {
+        open_system_settings_pane("Privacy_Accessibility")
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn open_input_monitoring_pane() -> Result<(), String> {
+        open_system_settings_pane("Privacy_ListenEvent")
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn open_accessibility_pane() -> Result<(), String> {
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn open_input_monitoring_pane() -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -57,4 +77,19 @@ unsafe fn ax_is_process_trusted() -> bool {
 #[cfg(target_os = "macos")]
 unsafe fn cg_preflight_listen_event_access() -> bool {
     CGPreflightListenEventAccess() != 0
+}
+
+#[cfg(target_os = "macos")]
+fn open_system_settings_pane(anchor: &str) -> Result<(), String> {
+    let url = format!("x-apple.systempreferences:com.apple.preference.security?{anchor}");
+    let status = std::process::Command::new("open")
+        .arg(&url)
+        .status()
+        .map_err(|error| format!("failed to open System Settings: {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("open exited with status {status}"))
+    }
 }

@@ -1,10 +1,27 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
 
 use crate::daemon::{DaemonRuntime, DaemonState};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeSnapshot {
+    pub state: String,
+    pub active_peer_id: Option<String>,
+    pub session_healthy: bool,
+    #[serde(default)]
+    pub local_capture_enabled: bool,
+    #[serde(default)]
+    pub capture_restarts: u64,
+    #[serde(default = "default_input_injection_backend")]
+    pub input_injection_backend: String,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonStatus {
@@ -13,6 +30,8 @@ pub struct DaemonStatus {
     pub session_healthy: bool,
     #[serde(default)]
     pub local_capture_enabled: bool,
+    #[serde(default)]
+    pub capture_restarts: u64,
     #[serde(default = "default_input_injection_backend")]
     pub input_injection_backend: String,
     #[serde(default)]
@@ -24,6 +43,24 @@ fn default_input_injection_backend() -> String {
 }
 
 impl DaemonStatus {
+    pub fn from_runtime(runtime: &DaemonRuntime) -> Self {
+        Self::from_snapshot(&RuntimeSnapshot::from_runtime(runtime))
+    }
+
+    pub fn from_snapshot(snapshot: &RuntimeSnapshot) -> Self {
+        Self {
+            state: snapshot.state.clone(),
+            active_peer_id: snapshot.active_peer_id.clone(),
+            session_healthy: snapshot.session_healthy,
+            local_capture_enabled: snapshot.local_capture_enabled,
+            capture_restarts: snapshot.capture_restarts,
+            input_injection_backend: snapshot.input_injection_backend.clone(),
+            notes: snapshot.notes.clone(),
+        }
+    }
+}
+
+impl RuntimeSnapshot {
     pub fn from_runtime(runtime: &DaemonRuntime) -> Self {
         let (state, active_peer_id) = match &runtime.state {
             DaemonState::Disconnected => ("disconnected".to_string(), None),
@@ -53,11 +90,14 @@ impl DaemonStatus {
             active_peer_id,
             session_healthy,
             local_capture_enabled: runtime.diagnostics.local_capture_enabled,
+            capture_restarts: runtime.diagnostics.capture_restarts,
             input_injection_backend: runtime.diagnostics.input_injection_backend.clone(),
             notes: runtime.diagnostics.notes.clone(),
         }
     }
+}
 
+impl DaemonStatus {
     pub fn load_from_path(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("failed to read daemon status from {}", path.display()))?;
@@ -83,6 +123,14 @@ impl DaemonStatus {
 
         Ok(())
     }
+}
+
+pub fn publish_snapshot(snapshot: &ArcSwap<RuntimeSnapshot>, runtime: &DaemonRuntime) {
+    snapshot.store(Arc::new(RuntimeSnapshot::from_runtime(runtime)));
+}
+
+pub fn load_snapshot(snapshot: &ArcSwap<RuntimeSnapshot>) -> Arc<RuntimeSnapshot> {
+    snapshot.load_full()
 }
 
 #[cfg(test)]
@@ -132,6 +180,7 @@ mod tests {
             active_peer_id: Some("office-pc".to_string()),
             session_healthy: true,
             local_capture_enabled: true,
+            capture_restarts: 2,
             input_injection_backend: "native".to_string(),
             notes: vec!["accessibility permission granted".to_string()],
         };

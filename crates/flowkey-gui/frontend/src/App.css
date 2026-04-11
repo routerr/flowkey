@@ -86,6 +86,24 @@ h1 {
   font-size: 0.9rem;
 }
 
+.permission-banner {
+  background: linear-gradient(135deg, #2a2411, #3b2d12);
+  border: 1px solid #8a6d1f;
+  color: #f7e2a4;
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+}
+
+.permission-banner p {
+  margin: 0.25rem 0 0;
+  color: #f0d78c;
+  max-width: 42rem;
+}
+
 .dashboard {
   display: grid;
   grid-template-columns: 1.5fr 1fr;

@@ -5,5 +5,5 @@ pub mod status;
 pub mod switching;
 
 pub use daemon::DaemonState;
-pub use status::DaemonStatus;
+pub use status::{DaemonStatus, RuntimeSnapshot};
 pub use switching::DaemonCommand;

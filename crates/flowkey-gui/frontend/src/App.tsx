@@ -1,11 +1,17 @@
 import { useState, useEffect } from 'react'
 import { invoke, event } from '@tauri-apps/api'
-import { type DiscoveredPeer, type Config, type DaemonStatus } from './types'
+import {
+  type DiscoveredPeer,
+  type Config,
+  type DaemonStatus,
+  type PermissionStatus,
+} from './types'
 import './App.css'
 
 function App() {
   const [config, setConfig] = useState<Config | null>(null)
   const [status, setStatus] = useState<DaemonStatus | null>(null)
+  const [permissions, setPermissions] = useState<PermissionStatus | null>(null)
   const [discoveredPeers, setDiscoveredPeers] = useState<DiscoveredPeer[]>([])
   const [pairingSas, setPairingSas] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -14,6 +20,7 @@ function App() {
   // Load config on mount
   useEffect(() => {
     loadConfig()
+    loadPermissionStatus()
   }, [])
 
   // Listen for daemon status events
@@ -45,6 +52,15 @@ function App() {
       setConfig(cfg)
     } catch (e) {
       setError(String(e))
+    }
+  }
+
+  async function loadPermissionStatus() {
+    try {
+      const next = await invoke<PermissionStatus>('get_permission_status')
+      setPermissions(next)
+    } catch (e) {
+      console.error('Permission status error:', e)
     }
   }
 
@@ -127,6 +143,18 @@ function App() {
     }
   }
 
+  async function openPermissions() {
+    try {
+      await invoke('open_permissions')
+      await loadPermissionStatus()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  const missingPermissions =
+    permissions && (!permissions.accessibility || !permissions.input_monitoring)
+
   return (
     <div className="container">
       <header>
@@ -142,6 +170,20 @@ function App() {
       </header>
 
       {error && <div className="error-bar">{error}</div>}
+      {missingPermissions && (
+        <section className="permission-banner">
+          <div>
+            <strong>Permissions needed</strong>
+            <p>
+              macOS permissions are still missing for input control or capture.
+              Open System Settings to finish setup.
+            </p>
+          </div>
+          <button onClick={openPermissions} className="btn-primary">
+            Open Settings
+          </button>
+        </section>
+      )}
 
       <main>
         {isPairing ? (

@@ -1,5 +1,8 @@
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use crate::event::{InputEvent, Modifiers};
 use crate::hotkey::{HotkeyBinding, HotkeyOutcome, HotkeyTracker};
@@ -20,6 +23,64 @@ pub trait InputCapture: Send {
     fn poll(&mut self) -> Option<CaptureSignal>;
     fn wait(&mut self) -> Option<CaptureSignal>;
     fn set_suppression_enabled(&mut self, enabled: bool);
+    fn capture_restart_counter(&self) -> Option<Arc<AtomicU64>> {
+        None
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn supervise_local_input_capture<F>(
+    restart_count: Arc<AtomicU64>,
+    mut spawn_listener: F,
+    shutdown: Option<Arc<AtomicBool>>,
+) where
+    F: FnMut() -> thread::JoinHandle<()> + Send + 'static,
+{
+    let backoff = [
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+        Duration::from_secs(5),
+        Duration::from_secs(10),
+    ];
+    let mut backoff_index = 0usize;
+
+    loop {
+        if shutdown
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
+            break;
+        }
+
+        let listener = spawn_listener();
+        let exit_reason = match listener.join() {
+            Ok(()) => "exited unexpectedly",
+            Err(error) => {
+                tracing::warn!(error = ?error, "local input capture listener panicked; restarting");
+                "panicked"
+            }
+        };
+
+        if shutdown
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
+            break;
+        }
+
+        restart_count.fetch_add(1, Ordering::SeqCst);
+        tracing::warn!(
+            reason = exit_reason,
+            restart = restart_count.load(Ordering::SeqCst),
+            "local input capture listener restarting"
+        );
+
+        let delay = backoff[backoff_index];
+        if backoff_index + 1 < backoff.len() {
+            backoff_index += 1;
+        }
+        thread::sleep(delay);
+    }
 }
 
 #[derive(Debug)]
@@ -28,6 +89,7 @@ pub struct LocalInputCapture {
     loopback: Option<SharedLoopbackSuppressor>,
     receiver: Option<Receiver<CaptureSignal>>,
     started: bool,
+    restart_count: Arc<AtomicU64>,
 }
 
 impl LocalInputCapture {
@@ -44,6 +106,7 @@ impl LocalInputCapture {
             loopback,
             receiver: None,
             started: false,
+            restart_count: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -59,24 +122,22 @@ impl InputCapture for LocalInputCapture {
             let (sender, receiver) = mpsc::channel();
             let binding = self.binding.clone();
             let loopback = self.loopback.clone();
+            let restart_count = Arc::clone(&self.restart_count);
             self.receiver = Some(receiver);
             self.started = true;
 
             thread::spawn(move || {
-                let mut tracker = HotkeyTracker::new(binding);
-                let mut state = CaptureState::default();
-
-                let result = rdev::listen(move |event| {
-                    if let Some(signal) = state.translate(event, &mut tracker, loopback.as_ref()) {
-                        if !matches!(signal, CaptureSignal::HotkeySuppressed) {
-                            let _ = sender.send(signal);
-                        }
-                    }
-                });
-
-                if let Err(error) = result {
-                    tracing::warn!(error = ?error, "local input capture listener stopped");
-                }
+                supervise_local_input_capture(
+                    restart_count,
+                    move || {
+                        spawn_local_input_listener(
+                            binding.clone(),
+                            loopback.clone(),
+                            sender.clone(),
+                        )
+                    },
+                    None,
+                );
             });
 
             return Ok(());
@@ -103,6 +164,88 @@ impl InputCapture for LocalInputCapture {
 
     fn set_suppression_enabled(&mut self, _enabled: bool) {
         // LocalInputCapture is passive and does not support suppression
+    }
+
+    fn capture_restart_counter(&self) -> Option<Arc<AtomicU64>> {
+        Some(Arc::clone(&self.restart_count))
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn spawn_local_input_listener(
+    binding: HotkeyBinding,
+    loopback: Option<SharedLoopbackSuppressor>,
+    sender: std::sync::mpsc::Sender<CaptureSignal>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut tracker = HotkeyTracker::new(binding);
+        let mut state = CaptureState::default();
+
+        let result = rdev::listen(move |event| {
+            if let Some(signal) = state.translate(event, &mut tracker, loopback.as_ref()) {
+                if !matches!(signal, CaptureSignal::HotkeySuppressed) {
+                    let _ = sender.send(signal);
+                }
+            }
+        });
+
+        if let Err(error) = result {
+            tracing::warn!(error = ?error, "local input capture listener stopped");
+        }
+    })
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+mod supervisor_tests {
+    use super::supervise_local_input_capture;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn restarts_once_after_listener_panic() {
+        let restart_count = Arc::new(AtomicU64::new(0));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let listener_attempts = Arc::new(AtomicUsize::new(0));
+        let allow_second_listener_to_exit = Arc::new(AtomicBool::new(false));
+
+        let supervisor_restart_count = Arc::clone(&restart_count);
+        let supervisor_shutdown = Arc::clone(&shutdown);
+        let attempts = Arc::clone(&listener_attempts);
+        let release_second = Arc::clone(&allow_second_listener_to_exit);
+
+        let supervisor = thread::spawn(move || {
+            supervise_local_input_capture(
+                supervisor_restart_count,
+                move || {
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                    let release_second = Arc::clone(&release_second);
+                    thread::spawn(move || {
+                        if attempt == 0 {
+                            panic!("intentional capture panic");
+                        }
+
+                        while !release_second.load(Ordering::SeqCst) {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                    })
+                },
+                Some(supervisor_shutdown),
+            );
+        });
+
+        while listener_attempts.load(Ordering::SeqCst) < 2 {
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        shutdown.store(true, Ordering::SeqCst);
+        allow_second_listener_to_exit.store(true, Ordering::SeqCst);
+        supervisor
+            .join()
+            .expect("supervisor thread should exit cleanly");
+
+        assert_eq!(restart_count.load(Ordering::SeqCst), 1);
     }
 }
 

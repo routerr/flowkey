@@ -46,7 +46,11 @@ enum Command {
     /// Show basic runtime or config status
     Status,
     /// Diagnose system permissions and network setup
-    Doctor,
+    Doctor {
+        /// Open macOS permission panes when diagnostics show missing access
+        #[arg(long = "open-permissions")]
+        open_permissions: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -273,8 +277,8 @@ async fn main() -> Result<()> {
 
             render_status(&config, status.as_ref());
         }
-        Command::Doctor => {
-            handle_doctor().await?;
+        Command::Doctor { open_permissions } => {
+            handle_doctor(open_permissions).await?;
         }
     }
 
@@ -340,6 +344,7 @@ fn status_lines(config: &Config, status: Option<&DaemonStatus>) -> Vec<String> {
                 "disabled"
             }
         ));
+        lines.push(format!("capture restarts: {}", snapshot.capture_restarts));
         lines.push(format!("inject: {}", snapshot.input_injection_backend));
 
         for note in &snapshot.notes {
@@ -367,7 +372,7 @@ fn active_peer_is_trusted(config: &Config, status: Option<&DaemonStatus>) -> boo
         .any(|peer| peer.id == active_peer_id && peer.trusted)
 }
 
-async fn handle_doctor() -> Result<()> {
+async fn handle_doctor(open_permissions: bool) -> Result<()> {
     println!("flky doctor - diagnosing system setup");
     println!("------------------------------------");
 
@@ -392,6 +397,12 @@ async fn handle_doctor() -> Result<()> {
             status.input_monitoring,
             "Enable in System Settings > Privacy & Security > Input Monitoring",
         );
+        if open_permissions {
+            let _ =
+                flowkey_platform_macos::permissions::PermissionStatus::open_accessibility_pane();
+            let _ =
+                flowkey_platform_macos::permissions::PermissionStatus::open_input_monitoring_pane();
+        }
     }
     #[cfg(target_os = "windows")]
     {
@@ -472,6 +483,7 @@ mod tests {
             active_peer_id: Some("office-pc".to_string()),
             session_healthy: true,
             local_capture_enabled: true,
+            capture_restarts: 0,
             input_injection_backend: "native".to_string(),
             notes: vec!["accessibility permission granted".to_string()],
         };
@@ -488,6 +500,7 @@ mod tests {
                 "trusted: yes".to_string(),
                 "session: healthy".to_string(),
                 "capture: enabled".to_string(),
+                "capture restarts: 0".to_string(),
                 "inject: native".to_string(),
                 "note: accessibility permission granted".to_string(),
             ]

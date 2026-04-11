@@ -60,7 +60,33 @@ The binary reads config from the platform-specific application data directory
 unless `FLKY_CONFIG` is set.
 EOF
 
+sign_identity="${FLKY_MACOS_SIGN_IDENTITY:-}"
+notary_apple_id="${FLKY_MACOS_NOTARY_APPLE_ID:-}"
+notary_password="${FLKY_MACOS_NOTARY_PASSWORD:-}"
+notary_team_id="${FLKY_MACOS_NOTARY_TEAM_ID:-}"
+
+if [[ -n "$sign_identity" ]]; then
+    echo "signing macOS bundle with identity: $sign_identity"
+    codesign --force --options runtime --timestamp --sign "$sign_identity" "$macos_dir/flky"
+    codesign --force --options runtime --timestamp --sign "$sign_identity" "$app_bundle"
+fi
+
 hdiutil create -volname flowkey -srcfolder "$app_bundle" -ov -format UDZO "$archive_path"
 shasum -a 256 "$archive_path" | awk '{print $1 "  " $2}' > "${archive_path}.sha256"
+
+if [[ -n "$notary_apple_id" || -n "$notary_password" || -n "$notary_team_id" ]]; then
+    if [[ -z "$sign_identity" || -z "$notary_apple_id" || -z "$notary_password" || -z "$notary_team_id" ]]; then
+        echo "macOS notarization requires FLKY_MACOS_SIGN_IDENTITY, FLKY_MACOS_NOTARY_APPLE_ID, FLKY_MACOS_NOTARY_PASSWORD, and FLKY_MACOS_NOTARY_TEAM_ID" >&2
+        exit 1
+    fi
+
+    echo "submitting macOS dmg to Apple notarization"
+    xcrun notarytool submit "$archive_path" \
+        --apple-id "$notary_apple_id" \
+        --password "$notary_password" \
+        --team-id "$notary_team_id" \
+        --wait
+    xcrun stapler staple "$archive_path"
+fi
 
 echo "created $archive_path"

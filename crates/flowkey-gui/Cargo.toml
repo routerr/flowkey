@@ -22,6 +22,9 @@ flowkey-daemon = { path = "../flowkey-daemon" }
 flowkey-net = { path = "../flowkey-net" }
 flowkey-protocol = { path = "../flowkey-protocol" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+flowkey-platform-macos = { path = "../flowkey-platform-macos" }
+
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!

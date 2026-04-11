@@ -29,11 +29,24 @@ Completed since this backlog was written:
 - Task A3.1, A3.2, and A3.3: supervised daemon lifecycle in the GUI, clean
   shutdown, and loopback poison recovery are implemented.
 - Task A4.1: pairing now persists the observed remote address.
+- Task B2.1: `HeldKeyTracker` now flushes held keys/buttons deterministically
+  through the session cleanup paths.
+- Task B2.2: switch-exit and release paths now flush the previous peer
+  before changing daemon control state.
+- Task B1.1: hot runtime status is mirrored through `ArcSwap`, so status
+  writes no longer serialize directly from the big mutex.
+- Task B1.2: `bootstrap.rs` is now split into smaller orchestration modules.
+- Task B3.1: capture listeners now restart after panic and surface a restart
+  counter in status output.
+- Task B3.2: macOS event-tap self-heal now re-enables disabled taps.
+- Task C1: macOS permission deep-link now opens System Settings from both the
+  CLI doctor flow and the GUI banner.
+- Task C2: native installer packaging now includes a WiX fragment for the
+  Windows firewall rule and macOS signing / notarization hooks.
 
 Current next step:
 
-- Task B2.1: implement `HeldKeyTracker` so disconnects and release paths can
-  always flush held modifiers/buttons deterministically.
+- Task C3: Auto-start & remote-control toggle.
 
 ---
 
@@ -343,6 +356,8 @@ and the GUI status bridge never contend with the network hot path.
     mouse events/sec (measured with a stress test binary).
   - No test regressions.
 
+**Status**: complete.
+
 #### Subtask B1.2 — Split `bootstrap.rs`
 
 - **Goal**: Reduce `bootstrap.rs` from 1335 lines to ≤ 600 by extracting
@@ -378,12 +393,17 @@ released whenever the control path exits, eliminating sticky-key bugs.
 - **Goal**: Track every `KeyDown`/`ButtonDown` the daemon has forwarded to a
   peer, and expose `release_all(&mut sink)`.
 - **Edit plan**:
-  1. Add `flowkey-core/src/held_keys.rs` with a `HeldKeyTracker` that
-     consumes `&InputEvent` and maintains two `HashSet`s.
-  2. Wire it into the forwarding path in `bootstrap.rs::route_input_event`.
+  1. Add `HeldKeyTracker` to `flowkey-core/src/recovery.rs` so it records
+     input-down state, tracks modifiers, and can synthesize releases in
+     reverse order.
+  2. Wire it into the forwarding path in
+     `flowkey-net/src/connection.rs::route_input_event` and the daemon
+     cleanup paths.
 - **Acceptance criteria**:
   - Unit tests cover: modifier chord (shift+ctrl), mouse drag, key repeat.
   - `release_all` generates the exact reverse events in deterministic order.
+
+**Status**: complete.
 
 #### Subtask B2.2 — Call `release_all` on all exit paths
 
@@ -398,6 +418,8 @@ released whenever the control path exits, eliminating sticky-key bugs.
     verify the remote peer has no pending shift.
   - Manual: holding `Cmd` while hitting the switch hotkey releases `Cmd` on
     the remote side.
+
+**Status**: complete.
 
 ---
 
@@ -428,6 +450,8 @@ user intervention.
     one restart followed by normal operation.
   - `flky status` exposes a `capture_restarts: u64` counter.
 
+**Status**: complete.
+
 #### Subtask B3.2 — macOS event-tap self-heal
 
 - **Goal**: Detect `CGEventTapIsEnabled == false` and re-enable the tap.
@@ -439,6 +463,8 @@ user intervention.
 - **Acceptance criteria**:
   - Under `stress-ng --cpu 4` for 60s, no events are lost and no warn-level
     "event tap timed out" messages remain unhandled.
+
+**Status**: complete.
 
 ---
 
@@ -465,6 +491,8 @@ user intervention.
   - At 1000Hz mouse input, outgoing packet rate stays below 150 pps.
   - Total accumulated delta over 10s matches the original stream within 1px.
 
+**Status**: complete.
+
 ---
 
 ### Task B5 — Chaos + regression tests
@@ -489,6 +517,8 @@ automatically.
   - Test passes in CI on macOS and Windows.
   - 3 consecutive disconnect/reconnect cycles leave no held keys.
 
+**Status**: complete.
+
 #### Subtask B5.2 — Sticky-key regression test
 
 - **Goal**: Cover `HeldKeyTracker` + recovery end-to-end.
@@ -498,6 +528,8 @@ automatically.
      release events.
 - **Acceptance criteria**:
   - Test passes and fails loudly if either tracker or recovery regresses.
+
+**Status**: complete.
 
 ---
 
@@ -524,6 +556,8 @@ installable artifacts.
 - **Acceptance criteria**: `flky doctor --open-permissions` opens both panes
   on macOS; no-op on other platforms.
 
+**Status**: complete.
+
 #### Subtask C1.2 — GUI prompts & recheck
 
 - **Edit plan**: In the React dashboard, when a missing-permission status
@@ -531,6 +565,12 @@ installable artifacts.
   Tauri command invoking C1.1 and then re-probes.
 - **Acceptance criteria**: Manual run on a clean Mac account reaches full
   functionality without reading any docs.
+
+**Status**: complete.
+
+### Task C1 status
+
+**Status**: complete.
 
 ---
 
@@ -554,6 +594,8 @@ installable artifacts.
 - **Acceptance criteria**: Installing the `.msi` on a fresh Windows VM
   grants the Firewall rule and leaves a working `flky.exe`.
 
+**Status**: complete.
+
 #### Subtask C2.2 — macOS notarization
 
 - **Edit plan**:
@@ -562,6 +604,12 @@ installable artifacts.
   2. Document the required env vars in `README.md`.
 - **Acceptance criteria**: `spctl --assess` on the produced `.dmg` returns
   `accepted`.
+
+**Status**: complete.
+
+### Task C2 status
+
+**Status**: complete.
 
 ---
 
