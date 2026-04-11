@@ -82,14 +82,15 @@ pub(crate) fn spawn_control_watcher(
         {
             let mut first_instance = true;
             loop {
-                let builder = if first_instance {
+                let mut builder = ServerOptions::new();
+                if first_instance {
+                    builder.first_pipe_instance(true);
                     first_instance = false;
-                    ServerOptions::new().first_pipe_instance(true)
-                } else {
-                    ServerOptions::new()
-                };
+                }
 
-                let mut pipe = match builder.create(&_control_pipe_name) {
+                let mut pipe: tokio::net::windows::named_pipe::NamedPipeServer = match builder
+                    .create(&_control_pipe_name)
+                {
                     Ok(pipe) => {
                         info!(pipe = %_control_pipe_name, "daemon control pipe listening");
                         pipe

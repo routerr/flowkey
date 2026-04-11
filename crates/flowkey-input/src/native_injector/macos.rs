@@ -1,4 +1,7 @@
-use super::{CoordinateBounds, DockCursorZone, InputEvent, NativeInputSink, SharedLoopbackSuppressor};
+use super::{
+    CoordinateBounds, DockCursorZone, InputEvent, NativeInputSink, SharedLoopbackSuppressor,
+};
+use crate::event::Modifiers;
 use core_graphics::display::CGDisplay;
 use core_graphics::event::{
     CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode, CGMouseButton,
@@ -8,7 +11,6 @@ use core_graphics::geometry::CGPoint;
 use enigo::Mouse;
 use std::time::{Duration, Instant};
 use tracing::debug;
-use crate::event::Modifiers;
 
 pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result<(), String> {
     let current = match sink.cursor_position {
