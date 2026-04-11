@@ -1,0 +1,51 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="deviceFill" x1="228" y1="292" x2="790" y2="814" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1A242B"/>
+      <stop offset="1" stop-color="#4B5E6B"/>
+    </linearGradient>
+    <linearGradient id="deviceTop" x1="232" y1="292" x2="792" y2="292" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#738693"/>
+      <stop offset="0.5" stop-color="#B1BDC6"/>
+      <stop offset="1" stop-color="#738693"/>
+    </linearGradient>
+    <linearGradient id="wire" x1="222" y1="616" x2="810" y2="404" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5B6E7A"/>
+      <stop offset="0.5" stop-color="#D5DDE3"/>
+      <stop offset="1" stop-color="#5B6E7A"/>
+    </linearGradient>
+    <filter id="softShadow" x="130" y="184" width="764" height="658" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="20"/>
+      <feGaussianBlur stdDeviation="24"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.027451 0 0 0 0 0.0392157 0 0 0 0 0.0470588 0 0 0 0.26 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <rect x="192" y="560" width="424" height="184" rx="62" fill="url(#deviceFill)"/>
+    <rect x="214" y="582" width="380" height="22" rx="11" fill="url(#deviceTop)" fill-opacity="0.56"/>
+
+    <rect x="254" y="624" width="60" height="38" rx="12" fill="#D6DEE4"/>
+    <rect x="328" y="624" width="60" height="38" rx="12" fill="#D6DEE4"/>
+    <rect x="402" y="624" width="60" height="38" rx="12" fill="#D6DEE4"/>
+    <rect x="476" y="624" width="60" height="38" rx="12" fill="#D6DEE4"/>
+    <rect x="254" y="674" width="134" height="34" rx="12" fill="#D6DEE4"/>
+    <rect x="402" y="674" width="134" height="34" rx="12" fill="#D6DEE4"/>
+
+    <path d="M708 538C708 459.68 771.68 396 850 396C883.137 396 910 422.863 910 456V624C910 674.81 868.81 716 818 716H790C744.712 716 708 679.288 708 634V538Z" fill="url(#deviceFill)"/>
+    <path d="M760 444C760 427.431 773.431 414 790 414H822C838.569 414 852 427.431 852 444V492H760V444Z" fill="#D6DEE4" fill-opacity="0.78"/>
+    <path d="M810 494V636" stroke="#D6DEE4" stroke-width="22" stroke-linecap="round"/>
+
+    <path d="M534 548C580 458 638 404 720 366" stroke="url(#wire)" stroke-width="28" stroke-linecap="round"/>
+    <path d="M670 330C670 266.487 721.487 215 785 215C848.513 215 900 266.487 900 330C900 393.513 848.513 445 785 445C721.487 445 670 393.513 670 330Z" fill="url(#deviceFill)"/>
+    <circle cx="785" cy="330" r="34" fill="#D6DEE4"/>
+    <path d="M724 330H846" stroke="#D6DEE4" stroke-width="18" stroke-linecap="round"/>
+    <path d="M785 269C820 289 838 307 846 330C838 353 820 371 785 391" stroke="#D6DEE4" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M785 269C750 289 732 307 724 330C732 353 750 371 785 391" stroke="#D6DEE4" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
