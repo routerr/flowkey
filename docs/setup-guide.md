@@ -54,6 +54,8 @@ By default, Windows Firewall blocks incoming TCP connections.
 ### 3. UIPI (User Interface Privilege Isolation)
 If you cannot control certain applications (e.g., Task Manager or elevated installers), you may need to run `flky daemon` as an **Administrator**.
 
+For release builds that request `uiAccess=true`, the binary must be code-signed and installed under `C:\Program Files\...` or another trusted location. Unsigned local debug builds still run, but Windows will ignore the `uiAccess` request.
+
 ---
 
 ## Diagnostics

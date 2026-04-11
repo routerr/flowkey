@@ -256,6 +256,7 @@ What is still not done yet:
 
 - Windows: start `flky daemon` from the interactive desktop session. If injection still fails, run it at the same privilege level as the target apps.
 - Windows: if peers cannot connect, open TCP port `48571` in Windows Firewall.
+- Windows: the signed release binary needs to live under `C:\Program Files\...` for `uiAccess=true` to take effect. Unsigned debug builds still run, but Windows ignores `uiAccess` until the binary is signed and installed in a trusted location.
 - macOS: grant Accessibility in `System Settings > Privacy & Security > Accessibility` and Input Monitoring in `System Settings > Privacy & Security > Input Monitoring`.
 
 - replay-resistant online authentication beyond token expiry

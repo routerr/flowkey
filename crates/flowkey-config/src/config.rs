@@ -579,6 +579,15 @@ hotkey = "Ctrl+Alt+Shift+K"
     }
 
     #[test]
+    fn log_dir_follows_config_location() {
+        let config_path = PathBuf::from("/tmp/flowkey/config.toml");
+
+        let log_dir = log_dir_for_config_path(&config_path);
+
+        assert_eq!(log_dir, PathBuf::from("/tmp/flowkey/logs"));
+    }
+
+    #[test]
     fn advertised_listen_addr_rewrites_wildcard_bind_to_local_ip() {
         let listen_addr = "0.0.0.0:48571";
         let advertised = advertised_listen_addr_with_resolver(listen_addr, || {

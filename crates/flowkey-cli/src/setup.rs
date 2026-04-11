@@ -97,7 +97,7 @@ pub async fn run_interactive_setup() -> Result<()> {
 
     // 5. Discovery
     println!("Searching for flowkey devices on the local network (2 seconds)...");
-    let mut discovered = match discover(Duration::from_secs(2)) {
+    let mut discovered = match discover(Duration::from_secs(2), Some(&config.node.id)) {
         Ok(peers) => peers,
         Err(e) => {
             println!("Discovery failed: {e}");
