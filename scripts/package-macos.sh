@@ -3,62 +3,43 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-cargo build -p flowkey-cli --release
-
 arch="$(uname -m)"
 case "$arch" in
     x86_64) arch="amd64" ;;
     aarch64|arm64) arch="arm64" ;;
 esac
 
-bundle_root="dist/flky-macos-${arch}"
-app_bundle="$bundle_root/flky.app"
-contents_dir="$app_bundle/Contents"
-macos_dir="$contents_dir/MacOS"
-resources_dir="$contents_dir/Resources"
-archive_path="dist/flky-macos-${arch}.dmg"
+gui_dir="crates/flowkey-gui"
+frontend_dir="$gui_dir/frontend"
+tauri_bin="frontend/node_modules/.bin/tauri"
+search_dir="target/release/bundle/macos"
+bundle_root="dist/flowkey-macos-${arch}"
+archive_path="dist/flowkey-macos-${arch}.dmg"
+
+cd "$frontend_dir"
+npm install
+npm run build
+cd ../..
+
+cd "$gui_dir"
+if [[ -x "$tauri_bin" ]]; then
+    "./$tauri_bin" build --bundles app
+else
+    npx @tauri-apps/cli build --bundles app
+fi
+cd ../..
 
 rm -rf "$bundle_root" "$archive_path" "${archive_path}.sha256"
-mkdir -p "$macos_dir" "$resources_dir"
+mkdir -p "$bundle_root"
 
-cp "target/release/flky" "$macos_dir/flky"
-chmod +x "$macos_dir/flky"
+app_source="$(find "$search_dir" -maxdepth 1 -name "*.app" -type d | head -n 1)"
+if [[ -z "$app_source" ]]; then
+    echo "no macOS app bundle found in $search_dir" >&2
+    exit 1
+fi
 
-cat > "$contents_dir/Info.plist" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>flky</string>
-    <key>CFBundleDisplayName</key>
-    <string>flowkey</string>
-    <key>CFBundleIdentifier</key>
-    <string>dev.flowkey.flky</string>
-    <key>CFBundleVersion</key>
-    <string>0.1.0</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>CFBundleExecutable</key>
-    <string>flky</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-</dict>
-</plist>
-EOF
-
-cp README.md "$resources_dir/README.md"
-cp docs/protocol.md "$resources_dir/protocol.md"
-cp docs/architecture.md "$resources_dir/architecture.md"
-cp scripts/install.sh "$resources_dir/install.sh"
-chmod +x "$resources_dir/install.sh"
-
-cat > "$resources_dir/INSTALL.txt" <<'EOF'
-Open Terminal and run the `flky` binary from this app bundle or move it onto your PATH.
-For a Cargo-based install, run the bundled `install.sh`.
-The binary reads config from the platform-specific application data directory
-unless `FLKY_CONFIG` is set.
-EOF
+app_bundle="$bundle_root/$(basename "$app_source")"
+cp -R "$app_source" "$app_bundle"
 
 sign_identity="${FLKY_MACOS_SIGN_IDENTITY:-}"
 notary_apple_id="${FLKY_MACOS_NOTARY_APPLE_ID:-}"
@@ -67,7 +48,6 @@ notary_team_id="${FLKY_MACOS_NOTARY_TEAM_ID:-}"
 
 if [[ -n "$sign_identity" ]]; then
     echo "signing macOS bundle with identity: $sign_identity"
-    codesign --force --options runtime --timestamp --sign "$sign_identity" "$macos_dir/flky"
     codesign --force --options runtime --timestamp --sign "$sign_identity" "$app_bundle"
 fi
 

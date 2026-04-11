@@ -298,11 +298,19 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
-            if let Ok(config) = Config::load_or_create() {
-                let handle = Arc::new(spawn_supervised(config));
-                let state = app.state::<AppState>();
-                let mut daemon = state.daemon.lock().unwrap();
-                *daemon = Some(handle);
+            let app_handle = app.handle();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(config) = Config::load_or_create() {
+                    let handle = Arc::new(spawn_supervised(config));
+                    let state = app_handle.state::<AppState>();
+                    let mut daemon = state.daemon.lock().unwrap();
+                    *daemon = Some(handle);
+                }
+            });
+
+            if let Some(window) = app.get_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
             }
 
             if let Ok(log_dir) = Config::log_dir() {

@@ -97,13 +97,6 @@ if [ "$PLATFORM" == "macos" ]; then
             echo "Portable App: dist/$(basename "$APP_PATH")"
         fi
     fi
-    
-    # Also copy raw binary as a fallback
-    if [ -f "target/release/flowkey-gui" ]; then
-        cp "target/release/flowkey-gui" dist/flowkey
-        chmod +x dist/flowkey
-        echo "Portable Binary: dist/flowkey"
-    fi
 
 elif [ "$PLATFORM" == "windows" ]; then
     TARGET_DIR="${CARGO_TARGET_DIR:-target}"
@@ -130,8 +123,6 @@ cat > flowkey <<EOF
 #!/usr/bin/env bash
 if [ -d "dist/flowkey.app" ]; then
     open dist/flowkey.app
-elif [ -f "dist/flowkey" ]; then
-    ./dist/flowkey
 elif [ -f "dist/flowkey.exe" ]; then
     ./dist/flowkey.exe
 else

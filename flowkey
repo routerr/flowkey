@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 if [ -d "dist/flowkey.app" ]; then
     open dist/flowkey.app
-elif [ -f "dist/flowkey" ]; then
-    ./dist/flowkey
 elif [ -f "dist/flowkey.exe" ]; then
     ./dist/flowkey.exe
 else

@@ -241,8 +241,12 @@ pub(crate) fn create_platform_input_capture(
                     .to_string(),
             ),
         };
-        let capture =
-            flowkey_input::capture::LocalInputCapture::with_loopback(binding, Some(loopback));
+        let capture = flowkey_platform_macos::capture::MacosCapture::with_loopback(
+            binding,
+            Some(loopback),
+            matches!(capture_mode, CaptureMode::Exclusive),
+            _suppression_state,
+        );
         let restart_counter = capture.capture_restart_counter();
         return (Box::new(capture), note, restart_counter);
     }
