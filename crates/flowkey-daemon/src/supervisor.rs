@@ -141,6 +141,7 @@ mod tests {
                 name: "Local Node".to_string(),
                 listen_addr: "127.0.0.1:48571".to_string(),
                 advertised_addr: None,
+                accept_remote_control: true,
                 private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
                 public_key: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
             },

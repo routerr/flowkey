@@ -43,10 +43,12 @@ Completed since this backlog was written:
   CLI doctor flow and the GUI banner.
 - Task C2: native installer packaging now includes a WiX fragment for the
   Windows firewall rule and macOS signing / notarization hooks.
+- Task C3: auto-start and remote-control settings are exposed in the GUI and
+  persisted through the autostart plugin / config.
 
 Current next step:
 
-- Task C3: Auto-start & remote-control toggle.
+- Task C4: Refactor `native_injector.rs`.
 
 ---
 
@@ -628,6 +630,8 @@ installable artifacts.
   settings toggle in the React dashboard and persisted preference.
 - **Acceptance criteria**: Toggle survives reboot on both platforms.
 
+**Status**: complete.
+
 #### Subtask C3.2 — Remote-control accept toggle
 
 - **Edit plan**:
@@ -636,6 +640,12 @@ installable artifacts.
   3. Surface the toggle in the GUI settings pane.
 - **Acceptance criteria**: With the flag off, a peer's `flky switch`
   returns "rejected" and no state transition occurs.
+
+**Status**: complete.
+
+### Task C3 status
+
+**Status**: complete.
 
 ---
 

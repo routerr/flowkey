@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { invoke, event } from '@tauri-apps/api'
+import { enable, disable, isEnabled } from 'tauri-plugin-autostart-api'
 import {
   type DiscoveredPeer,
   type Config,
@@ -12,6 +13,7 @@ function App() {
   const [config, setConfig] = useState<Config | null>(null)
   const [status, setStatus] = useState<DaemonStatus | null>(null)
   const [permissions, setPermissions] = useState<PermissionStatus | null>(null)
+  const [autostartEnabled, setAutostartEnabled] = useState<boolean | null>(null)
   const [discoveredPeers, setDiscoveredPeers] = useState<DiscoveredPeer[]>([])
   const [pairingSas, setPairingSas] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -21,6 +23,7 @@ function App() {
   useEffect(() => {
     loadConfig()
     loadPermissionStatus()
+    loadAutostartStatus()
   }, [])
 
   // Listen for daemon status events
@@ -61,6 +64,14 @@ function App() {
       setPermissions(next)
     } catch (e) {
       console.error('Permission status error:', e)
+    }
+  }
+
+  async function loadAutostartStatus() {
+    try {
+      setAutostartEnabled(await isEnabled())
+    } catch (e) {
+      console.error('Autostart status error:', e)
     }
   }
 
@@ -147,6 +158,31 @@ function App() {
     try {
       await invoke('open_permissions')
       await loadPermissionStatus()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  async function toggleAutostart() {
+    try {
+      if (autostartEnabled) {
+        await disable()
+      } else {
+        await enable()
+      }
+      await loadAutostartStatus()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  async function toggleRemoteControl() {
+    if (!config) return
+    try {
+      await invoke('set_accept_remote_control', {
+        enabled: !config.node.accept_remote_control,
+      })
+      await loadConfig()
     } catch (e) {
       setError(String(e))
     }
@@ -274,6 +310,36 @@ function App() {
                     {status?.notes.map((note, i) => (
                       <div key={i} className="note-item">• {note}</div>
                     ))}
+                  </div>
+                </div>
+              </section>
+
+              <section className="settings-section">
+                <h2>Settings</h2>
+                <div className="settings-card">
+                  <div className="setting-row">
+                    <div>
+                      <span className="setting-label">Launch at login</span>
+                      <p>Start the manager automatically when you sign in.</p>
+                    </div>
+                    <button
+                      onClick={toggleAutostart}
+                      className={`toggle-button ${autostartEnabled ? 'enabled' : 'disabled'}`}
+                    >
+                      {autostartEnabled ? 'On' : 'Off'}
+                    </button>
+                  </div>
+                  <div className="setting-row">
+                    <div>
+                      <span className="setting-label">Remote control mode</span>
+                      <p>Allow trusted peers to take control without a local prompt.</p>
+                    </div>
+                    <button
+                      onClick={toggleRemoteControl}
+                      className={`toggle-button ${config?.node.accept_remote_control ? 'enabled' : 'disabled'}`}
+                    >
+                      {config?.node.accept_remote_control ? 'On' : 'Off'}
+                    </button>
                   </div>
                 </div>
               </section>

@@ -14,6 +14,7 @@ use tauri::{
     CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
     SystemTrayMenuItem, WindowEvent,
 };
+use tauri_plugin_autostart::MacosLauncher;
 use tokio::net::TcpListener;
 
 struct AppState {
@@ -69,6 +70,13 @@ async fn open_permissions() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[tauri::command]
+async fn set_accept_remote_control(enabled: bool) -> Result<(), String> {
+    let mut config = Config::load_or_create().map_err(|e| e.to_string())?;
+    config.node.accept_remote_control = enabled;
+    config.save().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -259,6 +267,10 @@ fn main() {
     let system_tray = SystemTray::new().with_menu(tray_menu);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(AppState {
             active_pairing: Arc::new(Mutex::new(None)),
             active_discovery: Arc::new(Mutex::new(None)),
@@ -318,6 +330,7 @@ fn main() {
             get_config,
             get_permission_status,
             open_permissions,
+            set_accept_remote_control,
             enter_pairing_mode,
             connect_to_peer,
             confirm_pairing,

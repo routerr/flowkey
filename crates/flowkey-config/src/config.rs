@@ -27,6 +27,8 @@ pub struct NodeConfig {
     pub listen_addr: String,
     #[serde(default)]
     pub advertised_addr: Option<String>,
+    #[serde(default = "default_accept_remote_control")]
+    pub accept_remote_control: bool,
     pub private_key: String,
     pub public_key: String,
 }
@@ -298,6 +300,7 @@ impl Config {
                 name: hostname,
                 listen_addr: "0.0.0.0:48571".to_string(),
                 advertised_addr: None,
+                accept_remote_control: true,
                 private_key: STANDARD_NO_PAD.encode(signing_key.to_bytes()),
                 public_key: STANDARD_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
             },
@@ -318,6 +321,7 @@ impl Default for Config {
                 name: "Local Node".to_string(),
                 listen_addr: "0.0.0.0:48571".to_string(),
                 advertised_addr: None,
+                accept_remote_control: true,
                 private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
                 public_key: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
             },
@@ -364,6 +368,10 @@ fn normalize_id(value: &str) -> String {
     } else {
         compact
     }
+}
+
+fn default_accept_remote_control() -> bool {
+    true
 }
 
 fn generate_token_fragment(len: usize) -> String {
@@ -469,6 +477,7 @@ mod tests {
         assert_eq!(decoded.node.id, "local-node");
         assert_eq!(decoded.switch.hotkey, "Ctrl+Alt+Shift+K");
         assert_eq!(decoded.switch.capture_mode, CaptureMode::Passive);
+        assert!(decoded.node.accept_remote_control);
         assert_eq!(
             decoded.node.private_key,
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -552,6 +561,7 @@ mod tests {
 id = "local-node"
 name = "Local Node"
 listen_addr = "0.0.0.0:48571"
+accept_remote_control = true
 private_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 public_key = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
 

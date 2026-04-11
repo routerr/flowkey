@@ -222,6 +222,7 @@ pub(crate) async fn run_daemon_with_shutdown(
                             status_snapshot: Arc::clone(&status_snapshot),
                             status_path: status_path.clone(),
                             suppression_state: Arc::clone(&suppression_state),
+                            accept_remote_control: config.node.accept_remote_control,
                         };
                         let mut held_keys = HeldKeyTracker::default();
                         if let Err(error) = run_authenticated_session(
@@ -375,6 +376,7 @@ pub(crate) async fn run_daemon_with_shutdown(
                                 status_snapshot: Arc::clone(&status_snapshot),
                                 status_path: status_path.clone(),
                                 suppression_state: Arc::clone(&suppression_state),
+                                accept_remote_control: config.node.accept_remote_control,
                             };
                             let mut held_keys = HeldKeyTracker::default();
                             if let Err(error) = run_authenticated_session(

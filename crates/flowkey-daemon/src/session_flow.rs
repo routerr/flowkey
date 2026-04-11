@@ -18,10 +18,20 @@ pub(crate) struct DaemonSessionCallback {
     pub(crate) status_snapshot: Arc<ArcSwap<RuntimeSnapshot>>,
     pub(crate) status_path: PathBuf,
     pub(crate) suppression_state: Arc<AtomicBool>,
+    pub(crate) accept_remote_control: bool,
 }
 
 impl flowkey_net::connection::SessionStateCallback for DaemonSessionCallback {
     fn on_remote_switch(&self, peer_id: &str, request_id: &str) {
+        if !self.accept_remote_control {
+            warn!(
+                peer = %peer_id,
+                request = %request_id,
+                "remote switch request rejected by local configuration"
+            );
+            return;
+        }
+
         let (result, state_before) = {
             let mut runtime = self
                 .runtime
@@ -188,6 +198,7 @@ mod tests {
     use flowkey_core::RuntimeSnapshot;
     use flowkey_input::event::InputEvent;
     use flowkey_input::InputEventSink;
+    use flowkey_net::connection::SessionStateCallback;
     use flowkey_net::connection::{session_channel, SessionSender};
 
     use super::{cleanup_session, mark_lost_session};
@@ -464,5 +475,44 @@ mod tests {
         assert_eq!(status.state, "recovering");
         assert_eq!(status.active_peer_id.as_deref(), Some(peer_id));
         assert!(!status.session_healthy);
+    }
+
+    #[test]
+    fn remote_switch_rejected_when_remote_control_disabled() {
+        let runtime = Arc::new(Mutex::new(DaemonRuntime::new()));
+        let status_snapshot = Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(
+            &runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned"),
+        )));
+        let status_path = temp_status_path("remote-switch-disabled");
+        let callback = super::DaemonSessionCallback {
+            runtime: Arc::clone(&runtime),
+            status_snapshot,
+            status_path: status_path.clone(),
+            suppression_state: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            accept_remote_control: false,
+        };
+
+        {
+            let mut runtime = runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned");
+            runtime.mark_authenticated("office-pc");
+            runtime.toggle_controller().expect("should enter control");
+        }
+
+        callback.on_remote_switch("office-pc", "request-1");
+
+        let runtime = runtime
+            .lock()
+            .expect("daemon runtime mutex should not be poisoned");
+        assert_eq!(
+            runtime.state,
+            DaemonState::Controlling {
+                peer_id: "office-pc".to_string()
+            }
+        );
+        fs::remove_file(&status_path).ok();
     }
 }

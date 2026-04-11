@@ -13,6 +13,7 @@ export interface NodeConfig {
   name: string;
   listen_addr: string;
   advertised_addr?: string;
+  accept_remote_control: boolean;
   public_key: string;
 }
 

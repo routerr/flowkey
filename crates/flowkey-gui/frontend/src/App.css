@@ -220,6 +220,52 @@ ul {
   line-height: 1.2;
 }
 
+.settings-card {
+  background: linear-gradient(180deg, #202020, #191919);
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+}
+
+.setting-row p {
+  margin: 0.2rem 0 0;
+  color: #888;
+  font-size: 0.82rem;
+  max-width: 24rem;
+}
+
+.setting-label {
+  font-weight: 600;
+}
+
+.toggle-button {
+  min-width: 4.2rem;
+  border: none;
+  border-radius: 999px;
+  padding: 0.55rem 0.9rem;
+  font-weight: 700;
+}
+
+.toggle-button.enabled {
+  background: #113311;
+  color: #44bb44;
+}
+
+.toggle-button.disabled {
+  background: #331111;
+  color: #ff8a8a;
+}
+
 .text-success { color: #44bb44; }
 .text-error { color: #bb4444; }
 
