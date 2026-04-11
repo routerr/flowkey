@@ -21,30 +21,41 @@ esac
 
 echo "Platform detected: $PLATFORM"
 
+if [ "$PLATFORM" == "windows" ]; then
+    # Inject common Windows paths if missing
+    export PATH="$PATH:/c/msys64/ucrt64/bin:$HOME/.cargo/bin:/c/Program Files/nodejs"
+    NPM="npm.cmd"
+    NPX="npx.cmd"
+    TAURI_BIN="frontend/node_modules/.bin/tauri.cmd"
+else
+    NPM="npm"
+    NPX="npx"
+    TAURI_BIN="frontend/node_modules/.bin/tauri"
+fi
+
 # 1. Install/Update Frontend Dependencies
 echo "Step 1: Installing frontend dependencies..."
 cd crates/flowkey-gui/frontend
-npm install
+$NPM install
 cd ../../..
 
 # 2. Build Frontend
 echo "Step 2: Building frontend..."
 cd crates/flowkey-gui/frontend
-npm run build
+$NPM run build
 cd ../../..
 
 # 3. Build Rust Application (Tauri + Core)
 echo "Step 3: Building Rust application (Release)..."
 # We use the local tauri cli in frontend/node_modules if it exists
 cd crates/flowkey-gui
-TAURI_CLI="frontend/node_modules/.bin/tauri"
 
-if [ -f "$TAURI_CLI" ]; then
+if [ -f "$TAURI_BIN" ]; then
     echo "Using local Tauri CLI to build..."
-    ./"$TAURI_CLI" build
-elif command -v npx &> /dev/null; then
+    ./"$TAURI_BIN" build
+elif command -v $NPX &> /dev/null; then
     echo "Using npx to run Tauri CLI..."
-    npx @tauri-apps/cli build
+    $NPX @tauri-apps/cli build
 else
     echo "Tauri CLI not found, falling back to manual cargo build..."
     cargo build --release
