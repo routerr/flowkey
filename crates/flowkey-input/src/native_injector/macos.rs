@@ -46,7 +46,7 @@ pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result
             core_graphics::event::EventField::MOUSE_EVENT_DELTA_Y,
             i64::from(posted_dy),
         );
-        move_event.post(CGEventTapLocation::HID);
+        move_event.post(CGEventTapLocation::Session);
     } else {
         let (event_type, cg_button) = if sink.pressed_buttons.contains(&enigo::Button::Left) {
             (CGEventType::LeftMouseDragged, CGMouseButton::Left)
