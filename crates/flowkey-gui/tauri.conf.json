@@ -38,8 +38,8 @@
       "csp": null
     },
     "systemTray": {
-      "iconPath": "icons/icon.ico",
-      "iconAsTemplate": true
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": false
     },
     "windows": [
       {
