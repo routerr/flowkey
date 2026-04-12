@@ -4,6 +4,8 @@ use std::time::Instant;
 
 use enigo::{Axis, Button, Direction, Enigo, Key, Mouse, Settings};
 #[cfg(not(target_os = "macos"))]
+use enigo::Keyboard;
+#[cfg(not(target_os = "macos"))]
 use tracing::warn;
 
 use crate::event::{InputEvent, Modifiers, MouseButton};
