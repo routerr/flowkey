@@ -30,7 +30,11 @@ pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result
     let dest = CGPoint::new(target.0, target.1);
     let clamped = target != raw_target;
 
-    CGDisplay::warp_mouse_cursor_position(dest).map_err(|error| format!("{error:?}"))?;
+    // NOTE: Do NOT call CGDisplay::warp_mouse_cursor_position() here.
+    // That API triggers macOS's "warp suppression" which freezes delta
+    // processing for ~250ms after each call — causing cursor stutter when
+    // events arrive at high frequency. The CGEvent posted at HID level
+    // below already moves the cursor to `dest` without this penalty.
 
     if sink.pressed_buttons.is_empty() {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
