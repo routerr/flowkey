@@ -22,10 +22,16 @@ if ($processes) {
     Start-Sleep -Seconds 1
 }
 
-# 1. Install/Update Frontend Dependencies
+# 1. Install/Update Frontend Dependencies (skip if up to date)
 Write-Host "Step 1: Installing frontend dependencies..." -ForegroundColor Green
 Set-Location "crates/flowkey-gui/frontend"
-& npm install
+$needsInstall = (-not (Test-Path "node_modules")) -or `
+    ((Get-Item "package.json").LastWriteTime -gt (Get-Item "node_modules/.package-lock.json" -ErrorAction SilentlyContinue).LastWriteTime)
+if ($needsInstall) {
+    & npm install
+} else {
+    Write-Host "  node_modules up to date, skipping npm install" -ForegroundColor DarkGray
+}
 Set-Location $PROJECT_ROOT
 
 # 2. Build Frontend
@@ -34,7 +40,7 @@ Set-Location "crates/flowkey-gui/frontend"
 & npm run build
 Set-Location $PROJECT_ROOT
 
-# 3. Build Rust Application (Tauri + CLI)
+# 3. Build Rust Application (Tauri bundles GUI + CLI in one cargo invocation)
 Write-Host "Step 3: Building Rust applications (Release)..." -ForegroundColor Green
 
 # Build GUI with Tauri
@@ -53,9 +59,9 @@ if (Test-Path $TAURI_CLI) {
 }
 Set-Location $PROJECT_ROOT
 
-# Build CLI separately
-Write-Host "Building CLI application..." -ForegroundColor Cyan
-& cargo build -p flowkey-cli --release
+# Note: Tauri build already compiles the entire workspace in release mode,
+# so a separate `cargo build -p flowkey-cli --release` is not needed.
+# The CLI binary is available at target/release/flky.exe after the Tauri build.
 
 # 4. Collect Artifacts into dist/
 Write-Host "Step 4: Collecting artifacts..." -ForegroundColor Green

@@ -20,6 +20,14 @@ license = "MIT"
 version = "0.1.0"
 authors = ["Ray Chang"]
 
+[profile.release]
+# Use thin LTO instead of fat LTO — much faster linking on Windows MSVC
+# with nearly identical binary quality.
+lto = "thin"
+# More codegen units = faster compilation, slightly larger binary.
+# Default release is 1 (maximum optimization); 16 is a good trade-off.
+codegen-units = 16
+
 [workspace.dependencies]
 anyhow = "1"
 base64 = "0.22"

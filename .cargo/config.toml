@@ -1,0 +1,4 @@
+# Windows: use rust-lld as the linker for significantly faster link times.
+# Falls back to the default MSVC link.exe if lld is not available.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

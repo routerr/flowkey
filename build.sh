@@ -10,14 +10,10 @@ PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_ROOT"
 
 BUILD_TMP_DIR=""
-CARGO_TARGET_DIR=""
 
 cleanup_temp_dirs() {
     if [ -n "${BUILD_TMP_DIR:-}" ] && [ -d "$BUILD_TMP_DIR" ]; then
         rm -rf "$BUILD_TMP_DIR" 2>/dev/null || true
-    fi
-    if [ "${PLATFORM:-}" = "windows" ] && [ -n "${CARGO_TARGET_DIR:-}" ] && [ -d "$CARGO_TARGET_DIR" ]; then
-        rm -rf "$CARGO_TARGET_DIR" 2>/dev/null || true
     fi
 }
 
@@ -38,14 +34,14 @@ echo "Platform detected: $PLATFORM"
 if [ "$PLATFORM" == "windows" ]; then
     # Terminate running instances to unlock files
     echo "Step 0: Checking for running Flowkey processes..."
-    taskkill //F //IM flowkey-gui.exe //IM flky.exe //IM flowkey.exe 2>/dev/null || true
-    sleep 1
+    if taskkill //F //IM flowkey-gui.exe //IM flky.exe //IM flowkey.exe 2>/dev/null; then
+        sleep 1
+    fi
 
     # Inject common Windows paths if missing. Prioritize Winget Node.js to avoid MSYS2/Rolldown binding bugs.
     export PATH="/c/Users/user/AppData/Local/Microsoft/WinGet/Packages/OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe/node-v24.14.0-win-x64:$HOME/.cargo/bin:/c/msys64/ucrt64/bin:$PATH"
-    
-    # Use a fresh temp target dir per run to avoid stale MSI/NSIS artifacts causing
-    # permission-denied cleanup failures under MSYS2/UCRT64.
+
+    # Use a fresh temp dir for installer artifacts only (not cargo target).
     BUILD_TMP_DIR="$(mktemp -d /tmp/flowkey_build_tmp.XXXXXX)"
     export TMPDIR="$BUILD_TMP_DIR"
     if command -v cygpath >/dev/null 2>&1; then
@@ -57,7 +53,9 @@ if [ "$PLATFORM" == "windows" ]; then
         export TEMP="$BUILD_TMP_DIR"
     fi
 
-    export CARGO_TARGET_DIR="$(mktemp -d /tmp/cargo_target_flowkey.XXXXXX)"
+    # Clean stale bundle artifacts that can cause permission-denied errors
+    # under MSYS2, but keep the rest of target/ for incremental compilation.
+    rm -rf target/release/bundle 2>/dev/null || true
 
     NPM="npm.cmd"
     NPX="npx.cmd"
@@ -74,10 +72,14 @@ else
     fi
 fi
 
-# 1. Install/Update Frontend Dependencies
+# 1. Install/Update Frontend Dependencies (skip if up to date)
 echo "Step 1: Installing frontend dependencies..."
 cd crates/flowkey-gui/frontend
-$NPM install
+if [ ! -d "node_modules" ] || [ "package.json" -nt "node_modules/.package-lock.json" ]; then
+    $NPM install
+else
+    echo "  node_modules up to date, skipping npm install"
+fi
 cd ../../..
 
 # 2. Build Frontend
@@ -123,13 +125,13 @@ if [ "$PLATFORM" == "macos" ]; then
 
 elif [ "$PLATFORM" == "windows" ]; then
     TARGET_DIR="${CARGO_TARGET_DIR:-target}"
-    
+
     # On Windows, look for .exe
     if [ -f "$TARGET_DIR/release/flowkey-gui.exe" ]; then
         cp "$TARGET_DIR/release/flowkey-gui.exe" dist/flowkey.exe
         echo "Portable executable created: dist/flowkey.exe"
     fi
-    
+
     # Look for installer if generated
     SEARCH_DIR="$TARGET_DIR/release/bundle/msi"
     if [ -d "$SEARCH_DIR" ]; then

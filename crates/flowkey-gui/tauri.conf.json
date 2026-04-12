@@ -16,7 +16,7 @@
     },
     "bundle": {
       "active": true,
-      "targets": "all",
+      "targets": ["msi"],
       "identifier": "com.flowkey.app",
       "icon": [
         "icons/icon.png",
