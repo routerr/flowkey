@@ -94,16 +94,37 @@ impl NativeInputSink {
             InputEvent::KeyDown {
                 code, modifiers, ..
             } => {
-                let key_code = parse_key_code(code);
-                self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
-                self.key_action(key_code, Direction::Press)
+                // On macOS, bypass enigo and post CGEvents directly.
+                // Enigo's keyboard injection can fail when an active CGEventTap
+                // is running on the same process.
+                #[cfg(target_os = "macos")]
+                {
+                    self.update_modifier_state(code, true);
+                    self.current_modifiers = *modifiers;
+                    platform::post_key_event(self, code, true)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let key_code = parse_key_code(code);
+                    self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
+                    self.key_action(key_code, Direction::Press)
+                }
             }
             InputEvent::KeyUp {
                 code, modifiers, ..
             } => {
-                let key_code = parse_key_code(code);
-                self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
-                self.key_action(key_code, Direction::Release)
+                #[cfg(target_os = "macos")]
+                {
+                    self.update_modifier_state(code, false);
+                    self.current_modifiers = *modifiers;
+                    platform::post_key_event(self, code, false)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let key_code = parse_key_code(code);
+                    self.sync_modifiers(modifiers, modifier_code_for(&key_code))?;
+                    self.key_action(key_code, Direction::Release)
+                }
             }
             InputEvent::MouseMove {
                 dx, dy, modifiers, ..
@@ -178,6 +199,33 @@ impl NativeInputSink {
         Ok(())
     }
 
+    /// Track pressed_keys for keyboard events handled via direct CGEvent on macOS.
+    #[cfg(target_os = "macos")]
+    fn update_modifier_state(&mut self, code: &str, pressed: bool) {
+        // Track key in pressed_keys set for release_all
+        let key_code = parse_key_code(code);
+        match key_code {
+            KeyCode::Character(ch) => {
+                let key = Key::Unicode(ch);
+                if pressed {
+                    self.pressed_keys.insert(key);
+                } else {
+                    self.pressed_keys.remove(&key);
+                }
+            }
+            KeyCode::Named(named) => {
+                if let Some(key) = named_key(named) {
+                    if pressed {
+                        self.pressed_keys.insert(key);
+                    } else {
+                        self.pressed_keys.remove(&key);
+                    }
+                }
+            }
+            KeyCode::Modifier(_) | KeyCode::Unmapped(_) => {}
+        }
+    }
+
     fn set_modifier(&mut self, kind: ModifierKind, pressed: bool) -> Result<(), String> {
         let key = modifier_key(kind);
         let direction = if pressed {
@@ -204,6 +252,7 @@ impl NativeInputSink {
         platform::move_mouse(self, dx, dy)
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn key_action(&mut self, key_code: KeyCode, direction: Direction) -> Result<(), String> {
         match key_code {
             KeyCode::Modifier(kind) => {
@@ -225,6 +274,7 @@ impl NativeInputSink {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn apply_key(&mut self, key: Key, direction: Direction) -> Result<(), String> {
         self.enigo
             .key(key, direction)
@@ -533,6 +583,7 @@ fn named_key(named: NamedKey) -> Option<Key> {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn modifier_code_for(key_code: &KeyCode) -> Option<ModifierKind> {
     match key_code {
         KeyCode::Modifier(kind) => Some(*kind),
