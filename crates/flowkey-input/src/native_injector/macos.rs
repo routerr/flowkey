@@ -8,7 +8,7 @@ use core_graphics::event::{
 };
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::CGPoint;
-use enigo::Mouse;
+use enigo::{Direction, Mouse};
 use std::time::{Duration, Instant};
 use tracing::debug;
 
@@ -21,7 +21,7 @@ pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result
         }
     };
     let raw_target = (current.0 + f64::from(dx), current.1 + f64::from(dy));
-    let bounds = macos_visible_desktop_bounds();
+    let bounds = cached_desktop_bounds(sink);
     let target = bounds
         .map(|bounds| clamp_point(raw_target, bounds))
         .unwrap_or(raw_target);
@@ -96,11 +96,85 @@ pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result
     Ok(())
 }
 
+pub(super) fn post_mouse_button(
+    sink: &mut NativeInputSink,
+    button: enigo::Button,
+    direction: Direction,
+) -> Result<(), String> {
+    // Resolve the current cursor position from our tracked state, falling
+    // back to querying the OS only when we have never seen a move event.
+    // This avoids calling NSEvent::mouseLocation() (which enigo does
+    // internally) — that API returns a stale/frozen position when the
+    // cursor has been decoupled via CGAssociateMouseAndMouseCursorPosition.
+    let (x, y) = match sink.cursor_position {
+        Some(pos) => pos,
+        None => {
+            let (sx, sy) = sink.enigo.location().map_err(|e| e.to_string())?;
+            let pos = (f64::from(sx), f64::from(sy));
+            sink.cursor_position = Some(pos);
+            pos
+        }
+    };
+    let dest = CGPoint::new(x, y);
+
+    let (event_type, cg_button) = match (button, &direction) {
+        (enigo::Button::Left, Direction::Press) => {
+            (CGEventType::LeftMouseDown, CGMouseButton::Left)
+        }
+        (enigo::Button::Left, Direction::Release) => {
+            (CGEventType::LeftMouseUp, CGMouseButton::Left)
+        }
+        (enigo::Button::Right, Direction::Press) => {
+            (CGEventType::RightMouseDown, CGMouseButton::Right)
+        }
+        (enigo::Button::Right, Direction::Release) => {
+            (CGEventType::RightMouseUp, CGMouseButton::Right)
+        }
+        (_, Direction::Press) => (CGEventType::OtherMouseDown, CGMouseButton::Center),
+        (_, Direction::Release) => (CGEventType::OtherMouseUp, CGMouseButton::Center),
+        // Click is Press+Release; handle each half separately.
+        (enigo::Button::Left, Direction::Click) => {
+            post_mouse_button(sink, button, Direction::Press)?;
+            return post_mouse_button(sink, button, Direction::Release);
+        }
+        (enigo::Button::Right, Direction::Click) => {
+            post_mouse_button(sink, button, Direction::Press)?;
+            return post_mouse_button(sink, button, Direction::Release);
+        }
+        (_, Direction::Click) => {
+            post_mouse_button(sink, button, Direction::Press)?;
+            return post_mouse_button(sink, button, Direction::Release);
+        }
+    };
+
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| "failed to create macOS event source for button event".to_string())?;
+    let event = CGEvent::new_mouse_event(source, event_type, dest, cg_button)
+        .map_err(|_| "failed to create macOS mouse-button event".to_string())?;
+    event.post(CGEventTapLocation::HID);
+    Ok(())
+}
+
 pub(super) fn reset_state(sink: &mut NativeInputSink) {
     sink.cursor_position = None;
     sink.last_dock_zone = DockCursorZone::Interior;
     sink.dock_hide_allowed_at = None;
     sink.dock_visible = false;
+    sink.cached_bounds = None;
+}
+
+/// Return cached desktop bounds, re-querying the system at most once per second.
+fn cached_desktop_bounds(sink: &mut NativeInputSink) -> Option<CoordinateBounds> {
+    const BOUNDS_TTL: Duration = Duration::from_secs(1);
+    let now = Instant::now();
+    if let Some((cached_at, bounds)) = sink.cached_bounds {
+        if now.duration_since(cached_at) < BOUNDS_TTL {
+            return Some(bounds);
+        }
+    }
+    let bounds = macos_visible_desktop_bounds()?;
+    sink.cached_bounds = Some((now, bounds));
+    Some(bounds)
 }
 
 impl NativeInputSink {

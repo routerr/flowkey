@@ -43,6 +43,8 @@ pub struct NativeInputSink {
     dock_hide_allowed_at: Option<Instant>,
     #[cfg(target_os = "macos")]
     dock_visible: bool,
+    #[cfg(target_os = "macos")]
+    cached_bounds: Option<(Instant, CoordinateBounds)>,
 }
 
 #[cfg(target_os = "macos")]
@@ -81,6 +83,8 @@ impl NativeInputSink {
             dock_hide_allowed_at: None,
             #[cfg(target_os = "macos")]
             dock_visible: false,
+            #[cfg(target_os = "macos")]
+            cached_bounds: None,
         })
     }
 
@@ -248,9 +252,22 @@ impl NativeInputSink {
             MouseButton::Middle => Button::Middle,
         };
 
-        self.enigo
-            .button(button, direction)
-            .map_err(|error| error.to_string())?;
+        // On macOS, bypass enigo for button events and use CGEvent directly.
+        // Enigo internally calls NSEvent::mouseLocation() to get the position
+        // for the CGEvent, but that API returns a stale/frozen position when
+        // the cursor has been decoupled (CGAssociateMouseAndMouseCursorPosition).
+        // This mismatch causes the cursor to flash to the wrong location and
+        // can crash the controlled-side daemon.
+        #[cfg(target_os = "macos")]
+        {
+            platform::post_mouse_button(self, button, direction)?;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.enigo
+                .button(button, direction)
+                .map_err(|error| error.to_string())?;
+        }
 
         match direction {
             Direction::Press => {
@@ -287,16 +304,23 @@ impl NativeInputSink {
         }
 
         for button in buttons {
-            if let Some(button) = button_name(button) {
+            if let Some(btn_name) = button_name(button) {
                 self.record_loopback(&InputEvent::MouseButtonUp {
-                    button,
+                    button: btn_name,
                     modifiers: self.current_modifiers,
                     timestamp_us: 0,
                 });
             }
-            self.enigo
-                .button(button, Direction::Release)
-                .map_err(|error| error.to_string())?;
+            #[cfg(target_os = "macos")]
+            {
+                platform::post_mouse_button(self, button, Direction::Release)?;
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                self.enigo
+                    .button(button, Direction::Release)
+                    .map_err(|error| error.to_string())?;
+            }
         }
 
         for (kind, pressed) in modifiers.into_iter().rev() {

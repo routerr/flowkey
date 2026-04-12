@@ -12,26 +12,22 @@ pub struct FrameHeader {
 
 pub async fn write_message(stream: &mut TcpStream, message: &Message) -> Result<()> {
     let payload = bincode::serialize(message).context("failed to serialize message")?;
-    let header = FrameHeader {
-        payload_len: payload
-            .len()
-            .try_into()
-            .context("message payload too large")?,
-        message_type: message_type(message),
-    };
+    let payload_len: u32 = payload
+        .len()
+        .try_into()
+        .context("message payload too large")?;
+
+    // Combine header + payload into a single write to avoid sending
+    // multiple TCP segments when TCP_NODELAY is enabled.
+    let mut buf = Vec::with_capacity(4 + 1 + payload.len());
+    buf.extend_from_slice(&payload_len.to_be_bytes());
+    buf.push(message_type(message));
+    buf.extend_from_slice(&payload);
 
     stream
-        .write_u32(header.payload_len)
+        .write_all(&buf)
         .await
-        .context("failed to write payload length")?;
-    stream
-        .write_u8(header.message_type)
-        .await
-        .context("failed to write message type")?;
-    stream
-        .write_all(&payload)
-        .await
-        .context("failed to write payload")?;
+        .context("failed to write message")?;
 
     Ok(())
 }

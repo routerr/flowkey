@@ -119,9 +119,12 @@ impl InputCapture for MacosCapture {
                 CGEventType::LeftMouseUp,
                 CGEventType::RightMouseDown,
                 CGEventType::RightMouseUp,
+                CGEventType::OtherMouseDown,
+                CGEventType::OtherMouseUp,
                 CGEventType::MouseMoved,
                 CGEventType::LeftMouseDragged,
                 CGEventType::RightMouseDragged,
+                CGEventType::OtherMouseDragged,
                 CGEventType::KeyDown,
                 CGEventType::KeyUp,
                 CGEventType::FlagsChanged,
@@ -248,6 +251,7 @@ unsafe extern "C" fn raw_callback(
             CGEventType::MouseMoved
                 | CGEventType::LeftMouseDragged
                 | CGEventType::RightMouseDragged
+                | CGEventType::OtherMouseDragged
         )
     {
         let raw_dx = cg_event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_X);
@@ -337,9 +341,12 @@ fn convert_cg_event(
         CGEventType::LeftMouseUp => EventType::ButtonRelease(Button::Left),
         CGEventType::RightMouseDown => EventType::ButtonPress(Button::Right),
         CGEventType::RightMouseUp => EventType::ButtonRelease(Button::Right),
+        CGEventType::OtherMouseDown => EventType::ButtonPress(Button::Middle),
+        CGEventType::OtherMouseUp => EventType::ButtonRelease(Button::Middle),
         CGEventType::MouseMoved
         | CGEventType::LeftMouseDragged
-        | CGEventType::RightMouseDragged => {
+        | CGEventType::RightMouseDragged
+        | CGEventType::OtherMouseDragged => {
             let point = event.location();
             return Some(Event {
                 time: now,
