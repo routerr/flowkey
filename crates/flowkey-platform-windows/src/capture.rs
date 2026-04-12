@@ -171,25 +171,26 @@ fn spawn_grab_thread(
     thread::spawn(move || {
         let tracker = Arc::new(Mutex::new(HotkeyTracker::new(binding)));
         let state = Arc::new(Mutex::new(CaptureState::default()));
-        let pending_recenter = Arc::new(Mutex::new(None::<(u32, (f64, f64))>));
+        let pending_recenter = Arc::new(Mutex::new(None::<(f64, f64)>));
 
         let grab_tracker = Arc::clone(&tracker);
         let grab_state = Arc::clone(&state);
         let grab_pending_recenter = Arc::clone(&pending_recenter);
         let result = rdev::grab(move |event: rdev::Event| {
-            let mut state = grab_state.lock().unwrap();
-
             if consume_pending_recenter_event(
                 &event,
                 &mut grab_pending_recenter.lock().unwrap(),
             ) {
                 if let rdev::EventType::MouseMove { x, y } = event.event_type {
-                    state.last_mouse_position = Some((x, y));
+                    if let Ok(mut state) = grab_state.lock() {
+                        state.last_mouse_position = Some((x, y));
+                    }
                 }
                 return None;
             }
 
             let mut tracker = grab_tracker.lock().unwrap();
+            let mut state = grab_state.lock().unwrap();
 
             let saved_mouse_position = state.last_mouse_position;
             let signal = state.translate(event.clone(), &mut tracker, loopback.as_ref());
@@ -218,18 +219,7 @@ fn spawn_grab_thread(
                                             "recentering suppressed Windows cursor after forwarded mouse move"
                                         );
                                     }
-                                    
-                                    let mut pending = grab_pending_recenter.lock().unwrap();
-                                    if let Some((count, target)) = pending.as_mut() {
-                                        if (center.0 - target.0).abs() <= 1.0 && (center.1 - target.1).abs() <= 1.0 {
-                                            *count += 1;
-                                        } else {
-                                            *target = center;
-                                            *count = 1;
-                                        }
-                                    } else {
-                                        *pending = Some((1, center));
-                                    }
+                                    *grab_pending_recenter.lock().unwrap() = Some(center);
                                 } else {
                                     // Fall back to the old behavior if we fail to recenter.
                                     if let InputEvent::MouseMove { dx, dy, .. } = input {
@@ -268,9 +258,9 @@ fn spawn_grab_thread(
 
 fn consume_pending_recenter_event(
     event: &rdev::Event,
-    pending_recenter: &mut Option<(u32, (f64, f64))>,
+    pending_recenter: &mut Option<(f64, f64)>,
 ) -> bool {
-    let Some((count, target)) = pending_recenter.as_mut() else {
+    let Some(target) = pending_recenter.as_ref().copied() else {
         return false;
     };
 
@@ -279,10 +269,7 @@ fn consume_pending_recenter_event(
     };
 
     if (x - target.0).abs() <= 1.0 && (y - target.1).abs() <= 1.0 {
-        *count -= 1;
-        if *count == 0 {
-            *pending_recenter = None;
-        }
+        *pending_recenter = None;
         true
     } else {
         false
@@ -315,7 +302,7 @@ mod tests {
 
     #[test]
     fn consumes_matching_recentering_move_once() {
-        let mut pending = Some((1, (500.0, 400.0)));
+        let mut pending = Some((500.0, 400.0));
         let event = rdev::Event {
             event_type: rdev::EventType::MouseMove { x: 500.0, y: 400.0 },
             time: std::time::SystemTime::now(),
@@ -328,7 +315,7 @@ mod tests {
 
     #[test]
     fn ignores_unrelated_mouse_move() {
-        let mut pending = Some((1, (500.0, 400.0)));
+        let mut pending = Some((500.0, 400.0));
         let event = rdev::Event {
             event_type: rdev::EventType::MouseMove { x: 540.0, y: 400.0 },
             time: std::time::SystemTime::now(),
@@ -336,6 +323,6 @@ mod tests {
         };
 
         assert!(!consume_pending_recenter_event(&event, &mut pending));
-        assert_eq!(pending, Some((1, (500.0, 400.0))));
+        assert_eq!(pending, Some((500.0, 400.0)));
     }
 }
