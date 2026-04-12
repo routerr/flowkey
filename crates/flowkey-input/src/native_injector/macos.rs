@@ -12,6 +12,10 @@ use enigo::{Direction, Mouse};
 use std::time::{Duration, Instant};
 use tracing::debug;
 
+extern "C" {
+    fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> i32;
+}
+
 pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result<(), String> {
     let current = match sink.cursor_position {
         Some(pos) => pos,
@@ -30,12 +34,16 @@ pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result
     let dest = CGPoint::new(target.0, target.1);
     let clamped = target != raw_target;
 
-    // NOTE: Do NOT call CGDisplay::warp_mouse_cursor_position() here.
-    // That API triggers macOS's "warp suppression" which freezes delta
-    // processing for ~250ms after each call — causing cursor stutter when
-    // events arrive at high frequency. The CGEvent posted at HID level
-    // below already moves the cursor to `dest` without this penalty.
+    // Use CGWarpMouseCursorPosition to move the cursor, then immediately
+    // call CGAssociateMouseAndMouseCursorPosition(true) to reset the warp
+    // suppression timer. This is the proven approach used by Barrier/Synergy
+    // — it reliably positions the cursor without the ~250ms delta freeze.
+    CGDisplay::warp_mouse_cursor_position(dest).map_err(|error| format!("{error:?}"))?;
+    unsafe {
+        CGAssociateMouseAndMouseCursorPosition(true);
+    }
 
+    // Post a CGEvent so applications see the mouse-move event stream.
     if sink.pressed_buttons.is_empty() {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| "failed to create macOS event source for move".to_string())?;

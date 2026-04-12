@@ -160,7 +160,9 @@ impl SessionSenderInner {
                 pending.dx = pending.dx.saturating_add(dx);
                 pending.dy = pending.dy.saturating_add(dy);
                 pending.timestamp_us = timestamp_us;
-                pending.deadline = now + Duration::from_millis(8);
+                // Do NOT extend the deadline — use a fixed coalescing window.
+                // Extending the deadline causes unbounded latency when events
+                // arrive continuously (e.g., rapid mouse movement).
             }
             Some(_) => {
                 Self::flush_move_locked(&self.sender, &mut state)?;
@@ -169,7 +171,7 @@ impl SessionSenderInner {
                     dy,
                     modifiers,
                     timestamp_us,
-                    deadline: now + Duration::from_millis(8),
+                    deadline: now + Duration::from_millis(4),
                 });
             }
             None => {
@@ -178,7 +180,7 @@ impl SessionSenderInner {
                     dy,
                     modifiers,
                     timestamp_us,
-                    deadline: now + Duration::from_millis(8),
+                    deadline: now + Duration::from_millis(4),
                 });
             }
         }
@@ -208,7 +210,6 @@ impl SessionSenderInner {
                 pending.delta_x = pending.delta_x.saturating_add(delta_x);
                 pending.delta_y = pending.delta_y.saturating_add(delta_y);
                 pending.timestamp_us = timestamp_us;
-                pending.deadline = now + Duration::from_millis(8);
             }
             Some(_) => {
                 Self::flush_scroll_locked(&self.sender, &mut state)?;
@@ -217,7 +218,7 @@ impl SessionSenderInner {
                     delta_y,
                     modifiers,
                     timestamp_us,
-                    deadline: now + Duration::from_millis(8),
+                    deadline: now + Duration::from_millis(4),
                 });
             }
             None => {
@@ -226,7 +227,7 @@ impl SessionSenderInner {
                     delta_y,
                     modifiers,
                     timestamp_us,
-                    deadline: now + Duration::from_millis(8),
+                    deadline: now + Duration::from_millis(4),
                 });
             }
         }

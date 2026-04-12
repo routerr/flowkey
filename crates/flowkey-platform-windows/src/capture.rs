@@ -219,6 +219,10 @@ fn spawn_grab_thread(
                                             "recentering suppressed Windows cursor after forwarded mouse move"
                                         );
                                     }
+                                    // Immediately update baseline to center position.
+                                    // This eliminates the race window between SetCursorPos
+                                    // and the synthetic move event arriving in the hook.
+                                    state.last_mouse_position = Some(center);
                                     *grab_pending_recenter.lock().unwrap() = Some(center);
                                 } else {
                                     // Fall back to the old behavior if we fail to recenter.
