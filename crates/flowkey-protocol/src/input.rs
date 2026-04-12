@@ -68,6 +68,95 @@ pub enum InputEvent {
     },
 }
 
+impl InputEvent {
+    /// Compare two events ignoring `timestamp_us`.
+    ///
+    /// The loopback suppressor records injected events with the remote
+    /// timestamp, but the local capture generates a fresh local timestamp.
+    /// This method allows matching on everything except the timestamp.
+    pub fn matches_ignoring_timestamp(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                InputEvent::KeyDown {
+                    code: c1,
+                    modifiers: m1,
+                    ..
+                },
+                InputEvent::KeyDown {
+                    code: c2,
+                    modifiers: m2,
+                    ..
+                },
+            ) => c1 == c2 && m1 == m2,
+            (
+                InputEvent::KeyUp {
+                    code: c1,
+                    modifiers: m1,
+                    ..
+                },
+                InputEvent::KeyUp {
+                    code: c2,
+                    modifiers: m2,
+                    ..
+                },
+            ) => c1 == c2 && m1 == m2,
+            (
+                InputEvent::MouseMove {
+                    dx: dx1,
+                    dy: dy1,
+                    modifiers: m1,
+                    ..
+                },
+                InputEvent::MouseMove {
+                    dx: dx2,
+                    dy: dy2,
+                    modifiers: m2,
+                    ..
+                },
+            ) => dx1 == dx2 && dy1 == dy2 && m1 == m2,
+            (
+                InputEvent::MouseButtonDown {
+                    button: b1,
+                    modifiers: m1,
+                    ..
+                },
+                InputEvent::MouseButtonDown {
+                    button: b2,
+                    modifiers: m2,
+                    ..
+                },
+            ) => b1 == b2 && m1 == m2,
+            (
+                InputEvent::MouseButtonUp {
+                    button: b1,
+                    modifiers: m1,
+                    ..
+                },
+                InputEvent::MouseButtonUp {
+                    button: b2,
+                    modifiers: m2,
+                    ..
+                },
+            ) => b1 == b2 && m1 == m2,
+            (
+                InputEvent::MouseWheel {
+                    delta_x: dx1,
+                    delta_y: dy1,
+                    modifiers: m1,
+                    ..
+                },
+                InputEvent::MouseWheel {
+                    delta_x: dx2,
+                    delta_y: dy2,
+                    modifiers: m2,
+                    ..
+                },
+            ) => dx1 == dx2 && dy1 == dy2 && m1 == m2,
+            _ => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{InputEvent, Modifiers, MouseButton};
@@ -97,5 +186,47 @@ mod tests {
                 meta: false,
             }
         );
+    }
+
+    #[test]
+    fn event_match_can_ignore_timestamp_for_keyboard_events() {
+        let first = InputEvent::KeyDown {
+            code: "KeyK".to_string(),
+            modifiers: Modifiers {
+                shift: false,
+                control: true,
+                alt: false,
+                meta: false,
+            },
+            timestamp_us: 1,
+        };
+        let second = InputEvent::KeyDown {
+            code: "KeyK".to_string(),
+            modifiers: Modifiers {
+                shift: false,
+                control: true,
+                alt: false,
+                meta: false,
+            },
+            timestamp_us: 2,
+        };
+
+        assert!(first.matches_ignoring_timestamp(&second));
+    }
+
+    #[test]
+    fn event_match_still_rejects_different_payloads() {
+        let first = InputEvent::KeyDown {
+            code: "KeyK".to_string(),
+            modifiers: Modifiers::none(),
+            timestamp_us: 1,
+        };
+        let second = InputEvent::KeyDown {
+            code: "KeyL".to_string(),
+            modifiers: Modifiers::none(),
+            timestamp_us: 1,
+        };
+
+        assert!(!first.matches_ignoring_timestamp(&second));
     }
 }

@@ -58,7 +58,7 @@ impl LoopbackSuppressor {
         if let Some(index) = self
             .recent
             .iter()
-            .position(|recorded| &recorded.event == event)
+            .position(|recorded| recorded.event.matches_ignoring_timestamp(event))
         {
             self.recent.remove(index);
             return true;
@@ -132,6 +132,35 @@ mod tests {
         suppressor.record(injected);
 
         assert!(!suppressor.should_suppress(&captured));
+    }
+
+    #[test]
+    fn suppresses_matching_events_even_when_timestamps_differ() {
+        let mut suppressor = LoopbackSuppressor::new(Duration::from_secs(1));
+        let injected = InputEvent::KeyDown {
+            code: "KeyK".to_string(),
+            modifiers: Modifiers {
+                shift: false,
+                control: true,
+                alt: false,
+                meta: false,
+            },
+            timestamp_us: 100,
+        };
+        let captured = InputEvent::KeyDown {
+            code: "KeyK".to_string(),
+            modifiers: Modifiers {
+                shift: false,
+                control: true,
+                alt: false,
+                meta: false,
+            },
+            timestamp_us: 900,
+        };
+
+        suppressor.record(injected);
+
+        assert!(suppressor.should_suppress(&captured));
     }
 
     #[test]

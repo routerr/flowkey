@@ -2,7 +2,8 @@ use std::collections::HashSet;
 #[cfg(target_os = "macos")]
 use std::time::Instant;
 
-use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+use enigo::{Axis, Button, Direction, Enigo, Key, Mouse, Settings};
+#[cfg(not(target_os = "macos"))]
 use tracing::warn;
 
 use crate::event::{InputEvent, Modifiers, MouseButton};
@@ -227,16 +228,23 @@ impl NativeInputSink {
     }
 
     fn set_modifier(&mut self, kind: ModifierKind, pressed: bool) -> Result<(), String> {
-        let key = modifier_key(kind);
-        let direction = if pressed {
-            Direction::Press
-        } else {
-            Direction::Release
-        };
-
-        self.enigo
-            .key(key, direction)
-            .map_err(|error| error.to_string())?;
+        #[cfg(target_os = "macos")]
+        {
+            let code = modifier_kind_to_code(kind);
+            platform::post_key_event(self, code, pressed)?;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let key = modifier_key(kind);
+            let direction = if pressed {
+                Direction::Press
+            } else {
+                Direction::Release
+            };
+            self.enigo
+                .key(key, direction)
+                .map_err(|error| error.to_string())?;
+        }
 
         match kind {
             ModifierKind::Shift => self.current_modifiers.shift = pressed,
@@ -348,9 +356,17 @@ impl NativeInputSink {
             if let Some(event) = key_release_event(key, self.current_modifiers) {
                 self.record_loopback(&event);
             }
-            self.enigo
-                .key(key, Direction::Release)
-                .map_err(|error| error.to_string())?;
+            #[cfg(target_os = "macos")]
+            {
+                let code = key_code_name(key);
+                platform::post_key_event(self, &code, false)?;
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                self.enigo
+                    .key(key, Direction::Release)
+                    .map_err(|error| error.to_string())?;
+            }
         }
 
         for button in buttons {
@@ -407,6 +423,16 @@ impl crate::InputEventSink for NativeInputSink {
 
     fn release_all(&mut self) -> Result<(), String> {
         self.release_all_pressed()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn modifier_kind_to_code(kind: ModifierKind) -> &'static str {
+    match kind {
+        ModifierKind::Shift => "ShiftLeft",
+        ModifierKind::Control => "ControlLeft",
+        ModifierKind::Alt => "AltLeft",
+        ModifierKind::Meta => "MetaLeft",
     }
 }
 

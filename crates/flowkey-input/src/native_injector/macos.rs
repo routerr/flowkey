@@ -159,11 +159,14 @@ pub(super) fn post_mouse_button(
         }
     };
 
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+    // Use Private source + Session level to bypass our own HID-level event tap,
+    // consistent with keyboard injection. This prevents the tap from intercepting
+    // injected button events and avoids loopback suppressor mismatches.
+    let source = CGEventSource::new(CGEventSourceStateID::Private)
         .map_err(|_| "failed to create macOS event source for button event".to_string())?;
     let event = CGEvent::new_mouse_event(source, event_type, dest, cg_button)
         .map_err(|_| "failed to create macOS mouse-button event".to_string())?;
-    event.post(CGEventTapLocation::HID);
+    event.post(CGEventTapLocation::Session);
     Ok(())
 }
 
@@ -196,12 +199,17 @@ pub(super) fn post_key_event(
     };
 
     let flags = build_modifier_flags(&sink.current_modifiers);
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+    // Use Private source state to isolate from physical keyboard state,
+    // and post at Session level to bypass our own HID-level CGEventTap.
+    // Posting at HID would cause the tap to intercept the injected event,
+    // and the loopback suppressor fails to match it (timestamp mismatch),
+    // causing interference with keyboard injection.
+    let source = CGEventSource::new(CGEventSourceStateID::Private)
         .map_err(|_| "failed to create macOS event source for key event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)
         .map_err(|_| format!("failed to create macOS keyboard event for {code}"))?;
     event.set_flags(flags);
-    event.post(CGEventTapLocation::HID);
+    event.post(CGEventTapLocation::Session);
     Ok(())
 }
 
