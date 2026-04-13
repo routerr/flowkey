@@ -10,6 +10,8 @@ use crate::loopback::{lock_recovering, SharedLoopbackSuppressor};
 use crate::normalize::{
     normalize_button, normalize_key_code, normalize_mouse_move_delta, normalize_wheel_delta,
 };
+#[cfg(target_os = "windows")]
+use tracing::debug;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaptureSignal {
@@ -344,6 +346,20 @@ impl CaptureState {
         }
 
         self.modifiers = modifiers;
+        #[cfg(target_os = "windows")]
+        debug!(
+            target: "keyboard_trace",
+            platform = "windows",
+            physical_key = ?key,
+            code = %code,
+            pressed,
+            shift = modifiers.shift,
+            control = modifiers.control,
+            alt = modifiers.alt,
+            meta = modifiers.meta,
+            timestamp_us,
+            "captured keyboard event"
+        );
         if pressed {
             Some(InputEvent::KeyDown {
                 code,

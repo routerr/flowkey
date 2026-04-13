@@ -206,6 +206,31 @@ fn spawn_grab_thread(
                         Some(event)
                     }
                     CaptureSignal::Input(input) => {
+                        if let InputEvent::KeyDown {
+                            code,
+                            modifiers,
+                            timestamp_us,
+                        }
+                        | InputEvent::KeyUp {
+                            code,
+                            modifiers,
+                            timestamp_us,
+                        } = &input
+                        {
+                            debug!(
+                                target: "keyboard_trace",
+                                platform = "windows",
+                                code = %code,
+                                pressed = matches!(input, InputEvent::KeyDown { .. }),
+                                shift = modifiers.shift,
+                                control = modifiers.control,
+                                alt = modifiers.alt,
+                                meta = modifiers.meta,
+                                timestamp_us = *timestamp_us,
+                                suppression_enabled = suppression_enabled.load(Ordering::SeqCst),
+                                "forwarding keyboard event from Windows capture"
+                            );
+                        }
                         let _ = sender.send(CaptureSignal::Input(input.clone()));
                         if suppression_enabled.load(Ordering::SeqCst) {
                             if matches!(input, InputEvent::MouseMove { .. }) {

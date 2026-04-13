@@ -10,7 +10,7 @@ use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::CGPoint;
 use enigo::{Direction, Keyboard, Mouse};
 use std::time::{Duration, Instant};
-use tracing::debug;
+use tracing::{debug, warn};
 
 extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> i32;
@@ -159,14 +159,15 @@ pub(super) fn post_mouse_button(
         }
     };
 
-    // Use Private source + Session level to bypass our own HID-level event tap,
-    // consistent with keyboard injection. This prevents the tap from intercepting
-    // injected button events and avoids loopback suppressor mismatches.
-    let source = CGEventSource::new(CGEventSourceStateID::Private)
+    // Use HIDSystemState source + HID level, consistent with mouse-move
+    // and keyboard injection. This ensures the event enters the full input
+    // pipeline and is handled by all macOS subsystems. The loopback
+    // suppressor prevents the HID-level tap from re-capturing it.
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| "failed to create macOS event source for button event".to_string())?;
     let event = CGEvent::new_mouse_event(source, event_type, dest, cg_button)
         .map_err(|_| "failed to create macOS mouse-button event".to_string())?;
-    event.post(CGEventTapLocation::Session);
+    event.post(CGEventTapLocation::HID);
     Ok(())
 }
 
@@ -182,6 +183,13 @@ pub(super) fn post_key_event(
     key_down: bool,
 ) -> Result<(), String> {
     let Some(keycode) = key_code_to_macos_virtual(code) else {
+        warn!(
+            target: "keyboard_trace",
+            platform = sink.platform,
+            code = %code,
+            pressed = key_down,
+            "macOS keyboard injection fell back to enigo/unicode path"
+        );
         // Fall back to enigo for unmapped keys (Unicode characters, etc.)
         let key = match code.len() {
             1 => enigo::Key::Unicode(code.chars().next().unwrap()),
@@ -199,22 +207,42 @@ pub(super) fn post_key_event(
     };
 
     let flags = build_modifier_flags(&sink.current_modifiers);
-    // Use Private source state to isolate from physical keyboard state,
-    // and post at Session level to bypass our own HID-level CGEventTap.
-    // Posting at HID would cause the tap to intercept the injected event,
-    // and the loopback suppressor fails to match it (timestamp mismatch),
-    // causing interference with keyboard injection.
-    let source = CGEventSource::new(CGEventSourceStateID::Private)
+    // Use HIDSystemState source (same as mouse-move, which works reliably)
+    // so the event carries proper system-level keyboard state. Post at HID
+    // level so the event enters the full input pipeline — Session-level
+    // posting with a Private source caused events to be silently ignored
+    // by the macOS text input system on some configurations.
+    //
+    // The HID-level event tap will see the injected event, but the loopback
+    // suppressor filters it out (via matches_ignoring_timestamp). Even if
+    // loopback matching fails, the tap passes the event through because
+    // suppress_active is false when this machine is being controlled.
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| "failed to create macOS event source for key event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)
         .map_err(|_| format!("failed to create macOS keyboard event for {code}"))?;
     event.set_flags(flags);
-    event.post(CGEventTapLocation::Session);
+    debug!(
+        target: "keyboard_trace",
+        platform = sink.platform,
+        code = %code,
+        macos_keycode = keycode,
+        pressed = key_down,
+        shift = sink.current_modifiers.shift,
+        control = sink.current_modifiers.control,
+        alt = sink.current_modifiers.alt,
+        meta = sink.current_modifiers.meta,
+        "posting macOS keyboard CGEvent"
+    );
+    event.post(CGEventTapLocation::HID);
     Ok(())
 }
 
 fn build_modifier_flags(modifiers: &super::super::event::Modifiers) -> CGEventFlags {
-    let mut flags = CGEventFlags::CGEventFlagNull;
+    // Start with CGEventFlagNonCoalesced (0x100) which is present on all
+    // real keyboard events from the OS. Some macOS subsystems silently
+    // drop synthetic events that lack this flag.
+    let mut flags = CGEventFlags::CGEventFlagNonCoalesced;
     if modifiers.shift {
         flags |= CGEventFlags::CGEventFlagShift;
     }
@@ -480,9 +508,299 @@ impl NativeInputSink {
 #[cfg(test)]
 mod tests {
     use super::{
-        dock_cursor_zone, dock_proxy_transition, macos_posted_delta, DockCursorZone,
-        DockProxyAction,
+        build_modifier_flags, dock_cursor_zone, dock_proxy_transition, key_code_to_macos_virtual,
+        macos_posted_delta, DockCursorZone, DockProxyAction,
     };
+    use crate::event::Modifiers;
+    use core_graphics::event::CGEventFlags;
+
+    // ── build_modifier_flags tests ────────────────────────────────────
+
+    #[test]
+    fn modifier_flags_always_include_non_coalesced() {
+        let flags = build_modifier_flags(&Modifiers::none());
+        assert!(
+            flags.contains(CGEventFlags::CGEventFlagNonCoalesced),
+            "CGEventFlagNonCoalesced (0x100) must always be set"
+        );
+    }
+
+    #[test]
+    fn modifier_flags_with_no_modifiers_only_has_non_coalesced() {
+        let flags = build_modifier_flags(&Modifiers::none());
+        assert_eq!(flags, CGEventFlags::CGEventFlagNonCoalesced);
+    }
+
+    #[test]
+    fn modifier_flags_shift_sets_shift_bit() {
+        let flags = build_modifier_flags(&Modifiers {
+            shift: true,
+            control: false,
+            alt: false,
+            meta: false,
+        });
+        assert!(flags.contains(CGEventFlags::CGEventFlagShift));
+        assert!(flags.contains(CGEventFlags::CGEventFlagNonCoalesced));
+        assert!(!flags.contains(CGEventFlags::CGEventFlagControl));
+        assert!(!flags.contains(CGEventFlags::CGEventFlagAlternate));
+        assert!(!flags.contains(CGEventFlags::CGEventFlagCommand));
+    }
+
+    #[test]
+    fn modifier_flags_control_sets_control_bit() {
+        let flags = build_modifier_flags(&Modifiers {
+            shift: false,
+            control: true,
+            alt: false,
+            meta: false,
+        });
+        assert!(flags.contains(CGEventFlags::CGEventFlagControl));
+        assert!(flags.contains(CGEventFlags::CGEventFlagNonCoalesced));
+    }
+
+    #[test]
+    fn modifier_flags_alt_sets_alternate_bit() {
+        let flags = build_modifier_flags(&Modifiers {
+            shift: false,
+            control: false,
+            alt: true,
+            meta: false,
+        });
+        assert!(flags.contains(CGEventFlags::CGEventFlagAlternate));
+        assert!(flags.contains(CGEventFlags::CGEventFlagNonCoalesced));
+    }
+
+    #[test]
+    fn modifier_flags_meta_sets_command_bit() {
+        let flags = build_modifier_flags(&Modifiers {
+            shift: false,
+            control: false,
+            alt: false,
+            meta: true,
+        });
+        assert!(flags.contains(CGEventFlags::CGEventFlagCommand));
+        assert!(flags.contains(CGEventFlags::CGEventFlagNonCoalesced));
+    }
+
+    #[test]
+    fn modifier_flags_all_modifiers_combined() {
+        let flags = build_modifier_flags(&Modifiers {
+            shift: true,
+            control: true,
+            alt: true,
+            meta: true,
+        });
+        assert!(flags.contains(CGEventFlags::CGEventFlagShift));
+        assert!(flags.contains(CGEventFlags::CGEventFlagControl));
+        assert!(flags.contains(CGEventFlags::CGEventFlagAlternate));
+        assert!(flags.contains(CGEventFlags::CGEventFlagCommand));
+        assert!(flags.contains(CGEventFlags::CGEventFlagNonCoalesced));
+    }
+
+    // ── key_code_to_macos_virtual tests ───────────────────────────────
+
+    #[test]
+    fn all_letter_keys_map_to_distinct_virtual_keycodes() {
+        let letters = [
+            "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI", "KeyJ",
+            "KeyK", "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT",
+            "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ",
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for letter in &letters {
+            let keycode = key_code_to_macos_virtual(letter);
+            assert!(
+                keycode.is_some(),
+                "{letter} should map to a macOS virtual keycode"
+            );
+            assert!(
+                seen.insert(keycode.unwrap()),
+                "{letter} maps to a duplicate keycode"
+            );
+        }
+    }
+
+    #[test]
+    fn all_digit_keys_map_to_distinct_virtual_keycodes() {
+        let digits = [
+            "Digit0", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7",
+            "Digit8", "Digit9",
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for digit in &digits {
+            let keycode = key_code_to_macos_virtual(digit);
+            assert!(
+                keycode.is_some(),
+                "{digit} should map to a macOS virtual keycode"
+            );
+            assert!(
+                seen.insert(keycode.unwrap()),
+                "{digit} maps to a duplicate keycode"
+            );
+        }
+    }
+
+    #[test]
+    fn modifier_keys_map_to_expected_virtual_keycodes() {
+        assert_eq!(key_code_to_macos_virtual("ShiftLeft"), Some(0x38));
+        assert_eq!(key_code_to_macos_virtual("ShiftRight"), Some(0x3C));
+        assert_eq!(key_code_to_macos_virtual("ControlLeft"), Some(0x3B));
+        assert_eq!(key_code_to_macos_virtual("ControlRight"), Some(0x3E));
+        assert_eq!(key_code_to_macos_virtual("AltLeft"), Some(0x3A));
+        assert_eq!(key_code_to_macos_virtual("AltRight"), Some(0x3D));
+        assert_eq!(key_code_to_macos_virtual("MetaLeft"), Some(0x37));
+        assert_eq!(key_code_to_macos_virtual("MetaRight"), Some(0x36));
+    }
+
+    #[test]
+    fn navigation_keys_map_to_expected_virtual_keycodes() {
+        assert_eq!(key_code_to_macos_virtual("ArrowUp"), Some(0x7E));
+        assert_eq!(key_code_to_macos_virtual("ArrowDown"), Some(0x7D));
+        assert_eq!(key_code_to_macos_virtual("ArrowLeft"), Some(0x7B));
+        assert_eq!(key_code_to_macos_virtual("ArrowRight"), Some(0x7C));
+        assert_eq!(key_code_to_macos_virtual("Home"), Some(0x73));
+        assert_eq!(key_code_to_macos_virtual("End"), Some(0x77));
+        assert_eq!(key_code_to_macos_virtual("PageUp"), Some(0x74));
+        assert_eq!(key_code_to_macos_virtual("PageDown"), Some(0x79));
+    }
+
+    #[test]
+    fn common_editing_keys_map_to_expected_virtual_keycodes() {
+        assert_eq!(key_code_to_macos_virtual("Enter"), Some(0x24));
+        assert_eq!(key_code_to_macos_virtual("Tab"), Some(0x30));
+        assert_eq!(key_code_to_macos_virtual("Space"), Some(0x31));
+        assert_eq!(key_code_to_macos_virtual("Backspace"), Some(0x33));
+        assert_eq!(key_code_to_macos_virtual("Delete"), Some(0x75));
+        assert_eq!(key_code_to_macos_virtual("Escape"), Some(0x35));
+        assert_eq!(key_code_to_macos_virtual("CapsLock"), Some(0x39));
+    }
+
+    #[test]
+    fn function_keys_f1_through_f12_are_mapped() {
+        let f_keys = [
+            "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+        ];
+        for f_key in &f_keys {
+            assert!(
+                key_code_to_macos_virtual(f_key).is_some(),
+                "{f_key} should map to a macOS virtual keycode"
+            );
+        }
+    }
+
+    #[test]
+    fn punctuation_keys_are_mapped() {
+        let punctuation = [
+            "Minus",
+            "Equal",
+            "BracketLeft",
+            "BracketRight",
+            "Backslash",
+            "Semicolon",
+            "Quote",
+            "Backquote",
+            "Comma",
+            "Period",
+            "Slash",
+        ];
+        for key in &punctuation {
+            assert!(
+                key_code_to_macos_virtual(key).is_some(),
+                "{key} should map to a macOS virtual keycode"
+            );
+        }
+    }
+
+    #[test]
+    fn numpad_keys_are_mapped() {
+        let numpad = [
+            "Numpad0",
+            "Numpad1",
+            "Numpad2",
+            "Numpad3",
+            "Numpad4",
+            "Numpad5",
+            "Numpad6",
+            "Numpad7",
+            "Numpad8",
+            "Numpad9",
+            "NumpadAdd",
+            "NumpadSubtract",
+            "NumpadMultiply",
+            "NumpadDivide",
+            "NumpadDecimal",
+            "NumpadEnter",
+            "NumpadEqual",
+        ];
+        for key in &numpad {
+            assert!(
+                key_code_to_macos_virtual(key).is_some(),
+                "{key} should map to a macOS virtual keycode"
+            );
+        }
+    }
+
+    #[test]
+    fn unmapped_codes_return_none() {
+        assert_eq!(key_code_to_macos_virtual("Insert"), None);
+        assert_eq!(key_code_to_macos_virtual("ScrollLock"), None);
+        assert_eq!(key_code_to_macos_virtual("PrintScreen"), None);
+        assert_eq!(key_code_to_macos_virtual("Pause"), None);
+        assert_eq!(key_code_to_macos_virtual("NonExistentKey"), None);
+        assert_eq!(key_code_to_macos_virtual(""), None);
+    }
+
+    // ── Windows→Mac key code round-trip coverage ──────────────────────
+    //
+    // Every protocol code that `normalize_key_code` (Windows capture) can
+    // emit for standard keys must have a mapping in
+    // `key_code_to_macos_virtual`, otherwise those keys are silently
+    // dropped on the Mac side.
+
+    #[test]
+    fn all_windows_normalized_keycodes_have_macos_virtual_mapping() {
+        // These are the protocol codes emitted by normalize_key_code in
+        // normalize.rs for all standard keyboard keys.
+        let windows_codes = [
+            // Letters
+            "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI", "KeyJ",
+            "KeyK", "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT",
+            "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ",
+            // Digits
+            "Digit0", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7",
+            "Digit8", "Digit9",
+            // Modifiers
+            "ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight", "AltLeft", "AltRight",
+            "MetaLeft", "MetaRight",
+            // Navigation
+            "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp",
+            "PageDown",
+            // Editing
+            "Enter", "Tab", "Space", "Backspace", "Delete", "Escape", "CapsLock",
+            // Punctuation
+            "Minus", "Equal", "BracketLeft", "BracketRight", "Backslash", "Semicolon", "Quote",
+            "Backquote", "Comma", "Period", "Slash",
+            // Function keys
+            "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+            // Numpad
+            "Numpad0", "Numpad1", "Numpad2", "Numpad3", "Numpad4", "Numpad5", "Numpad6",
+            "Numpad7", "Numpad8", "Numpad9", "NumpadAdd", "NumpadSubtract", "NumpadMultiply",
+            "NumpadDivide", "NumpadDecimal", "NumpadEnter", "NumpadEqual", "NumLock",
+        ];
+
+        let mut unmapped = Vec::new();
+        for code in &windows_codes {
+            if key_code_to_macos_virtual(code).is_none() {
+                unmapped.push(*code);
+            }
+        }
+        assert!(
+            unmapped.is_empty(),
+            "the following Windows key codes have no macOS virtual keycode mapping: {unmapped:?}"
+        );
+    }
+
+    // ── existing tests ────────────────────────────────────────────────
 
     #[test]
     fn preserves_edge_pressure_when_cursor_is_clamped() {

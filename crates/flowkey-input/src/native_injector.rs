@@ -5,6 +5,8 @@ use std::time::Instant;
 use enigo::{Axis, Button, Direction, Enigo, Key, Mouse, Settings};
 #[cfg(not(target_os = "macos"))]
 use enigo::Keyboard;
+#[cfg(target_os = "macos")]
+use tracing::debug;
 #[cfg(not(target_os = "macos"))]
 use tracing::warn;
 
@@ -102,6 +104,17 @@ impl NativeInputSink {
                 // is running on the same process.
                 #[cfg(target_os = "macos")]
                 {
+                    debug!(
+                        target: "keyboard_trace",
+                        platform = self.platform,
+                        code = %code,
+                        pressed = true,
+                        shift = modifiers.shift,
+                        control = modifiers.control,
+                        alt = modifiers.alt,
+                        meta = modifiers.meta,
+                        "injecting keyboard event into macOS sink"
+                    );
                     self.update_modifier_state(code, true);
                     self.current_modifiers = *modifiers;
                     platform::post_key_event(self, code, true)
@@ -118,6 +131,17 @@ impl NativeInputSink {
             } => {
                 #[cfg(target_os = "macos")]
                 {
+                    debug!(
+                        target: "keyboard_trace",
+                        platform = self.platform,
+                        code = %code,
+                        pressed = false,
+                        shift = modifiers.shift,
+                        control = modifiers.control,
+                        alt = modifiers.alt,
+                        meta = modifiers.meta,
+                        "injecting keyboard event into macOS sink"
+                    );
                     self.update_modifier_state(code, false);
                     self.current_modifiers = *modifiers;
                     platform::post_key_event(self, code, false)
