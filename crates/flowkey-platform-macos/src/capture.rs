@@ -1,8 +1,8 @@
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::thread;
 use std::time::SystemTime;
 
@@ -49,8 +49,11 @@ extern "C" {
     ) -> CFRunLoopSourceRef;
     fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFRunLoopMode);
     fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+    fn CFRunLoopSourceInvalidate(source: CFRunLoopSourceRef);
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+    fn CFMachPortInvalidate(tap: CFMachPortRef);
     fn CFRunLoopRun();
+    fn CFRelease(cf: *const c_void);
     static kCFRunLoopCommonModes: CFRunLoopMode;
     fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> i32;
 }
@@ -62,6 +65,7 @@ pub struct MacosCapture {
     suppression_enabled: Arc<AtomicBool>,
     started: bool,
     exclusive: bool,
+    restart_count: Arc<AtomicU64>,
 }
 
 impl MacosCapture {
@@ -82,6 +86,7 @@ impl MacosCapture {
             suppression_enabled,
             started: false,
             exclusive,
+            restart_count: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -97,72 +102,58 @@ impl InputCapture for MacosCapture {
         let loopback = self.loopback.clone();
         let suppression_enabled = Arc::clone(&self.suppression_enabled);
         let exclusive = self.exclusive;
+        let restart_count = Arc::clone(&self.restart_count);
+        let (startup_tx, startup_rx) = mpsc::sync_channel(1);
         self.receiver = Some(receiver);
-        self.started = true;
 
         thread::spawn(move || {
-            let mut context = Box::new(TapContext {
-                sender,
-                tracker: Arc::new(Mutex::new(HotkeyTracker::new(binding))),
-                state: Arc::new(Mutex::new(CaptureState::default())),
-                loopback,
-                suppression_enabled,
-                exclusive,
-                tap: std::ptr::null_mut(),
-                last_flags: CGEventFlags::CGEventFlagNull,
-                cursor_decoupled: false,
-            });
+            let backoff = [1_u64, 2, 5, 10];
+            let mut backoff_index = 0usize;
+            let mut startup_tx = Some(startup_tx);
 
-            let context_ptr: *mut TapContext = &mut *context;
-            let mask = event_mask(&[
-                CGEventType::LeftMouseDown,
-                CGEventType::LeftMouseUp,
-                CGEventType::RightMouseDown,
-                CGEventType::RightMouseUp,
-                CGEventType::OtherMouseDown,
-                CGEventType::OtherMouseUp,
-                CGEventType::MouseMoved,
-                CGEventType::LeftMouseDragged,
-                CGEventType::RightMouseDragged,
-                CGEventType::OtherMouseDragged,
-                CGEventType::KeyDown,
-                CGEventType::KeyUp,
-                CGEventType::FlagsChanged,
-                CGEventType::ScrollWheel,
-            ]);
+            loop {
+                let exit = run_event_tap(
+                    binding.clone(),
+                    loopback.clone(),
+                    Arc::clone(&suppression_enabled),
+                    exclusive,
+                    sender.clone(),
+                    startup_tx.take(),
+                );
 
-            let tap = unsafe {
-                CGEventTapCreate(
-                    CGEventTapLocation::HID,
-                    kCGHeadInsertEventTap,
-                    if exclusive { 0 } else { 1 },
-                    mask,
-                    raw_callback,
-                    context_ptr.cast(),
-                )
-            };
-
-            if tap.is_null() {
-                warn!("macOS event tap creation failed");
-                return;
-            }
-
-            context.tap = tap;
-
-            unsafe {
-                let loop_source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
-                if loop_source.is_null() {
-                    warn!("macOS event tap runloop source creation failed");
+                if exit.startup_failed {
                     return;
                 }
 
-                CFRunLoopAddSource(CFRunLoopGetCurrent(), loop_source, kCFRunLoopCommonModes);
-                CGEventTapEnable(tap, true);
-                CFRunLoopRun();
+                let restart = restart_count.fetch_add(1, Ordering::SeqCst) + 1;
+                warn!(restart, error = %exit.error, "macOS capture listener exited; restarting");
+
+                if sender.send(CaptureSignal::HotkeySuppressed).is_err() {
+                    break;
+                }
+
+                let delay = backoff[backoff_index];
+                if backoff_index + 1 < backoff.len() {
+                    backoff_index += 1;
+                }
+                thread::sleep(std::time::Duration::from_secs(delay));
             }
         });
 
-        Ok(())
+        match startup_rx.recv() {
+            Ok(Ok(())) => {
+                self.started = true;
+                Ok(())
+            }
+            Ok(Err(error)) => {
+                self.receiver = None;
+                Err(error)
+            }
+            Err(_) => {
+                self.receiver = None;
+                Err("macOS event tap startup acknowledgment channel closed".to_string())
+            }
+        }
     }
 
     fn poll(&mut self) -> Option<CaptureSignal> {
@@ -191,12 +182,126 @@ impl InputCapture for MacosCapture {
             }
         }
     }
+
+    fn capture_restart_counter(&self) -> Option<Arc<AtomicU64>> {
+        Some(Arc::clone(&self.restart_count))
+    }
+}
+
+struct TapExit {
+    error: String,
+    startup_failed: bool,
+}
+
+fn run_event_tap(
+    binding: HotkeyBinding,
+    loopback: Option<SharedLoopbackSuppressor>,
+    suppression_enabled: Arc<AtomicBool>,
+    exclusive: bool,
+    sender: mpsc::Sender<CaptureSignal>,
+    mut startup_tx: Option<mpsc::SyncSender<Result<(), String>>>,
+) -> TapExit {
+    let mut context = Box::new(TapContext {
+        sender,
+        tracker: HotkeyTracker::new(binding),
+        state: CaptureState::default(),
+        loopback,
+        suppression_enabled: Arc::clone(&suppression_enabled),
+        exclusive,
+        tap: std::ptr::null_mut(),
+        last_flags: CGEventFlags::CGEventFlagNull,
+        cursor_decoupled: false,
+    });
+
+    let context_ptr: *mut TapContext = &mut *context;
+    let mask = event_mask(&[
+        CGEventType::LeftMouseDown,
+        CGEventType::LeftMouseUp,
+        CGEventType::RightMouseDown,
+        CGEventType::RightMouseUp,
+        CGEventType::OtherMouseDown,
+        CGEventType::OtherMouseUp,
+        CGEventType::MouseMoved,
+        CGEventType::LeftMouseDragged,
+        CGEventType::RightMouseDragged,
+        CGEventType::OtherMouseDragged,
+        CGEventType::KeyDown,
+        CGEventType::KeyUp,
+        CGEventType::FlagsChanged,
+        CGEventType::ScrollWheel,
+    ]);
+
+    let tap = unsafe {
+        CGEventTapCreate(
+            CGEventTapLocation::HID,
+            kCGHeadInsertEventTap,
+            if exclusive { 0 } else { 1 },
+            mask,
+            raw_callback,
+            context_ptr.cast(),
+        )
+    };
+
+    if tap.is_null() {
+        let error = "macOS event tap creation failed".to_string();
+        let startup_failed = startup_tx.is_some();
+        if let Some(tx) = startup_tx.take() {
+            let _ = tx.send(Err(error.clone()));
+        }
+        return TapExit {
+            error,
+            startup_failed,
+        };
+    }
+
+    context.tap = tap;
+
+    unsafe {
+        let loop_source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
+        if loop_source.is_null() {
+            let error = "macOS event tap runloop source creation failed".to_string();
+            let startup_failed = startup_tx.is_some();
+            if let Some(tx) = startup_tx.take() {
+                let _ = tx.send(Err(error.clone()));
+            }
+            CFMachPortInvalidate(tap);
+            CFRelease(tap.cast());
+            return TapExit {
+                error,
+                startup_failed,
+            };
+        }
+
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), loop_source, kCFRunLoopCommonModes);
+        CGEventTapEnable(tap, true);
+        if exclusive && suppression_enabled.load(Ordering::SeqCst) {
+            CGAssociateMouseAndMouseCursorPosition(false);
+            context.cursor_decoupled = true;
+        }
+        if let Some(tx) = startup_tx.take() {
+            let _ = tx.send(Ok(()));
+        }
+        CFRunLoopRun();
+
+        if context.cursor_decoupled {
+            CGAssociateMouseAndMouseCursorPosition(true);
+        }
+        CFRunLoopSourceInvalidate(loop_source);
+        CFMachPortInvalidate(tap);
+        CFRelease(loop_source.cast());
+        CFRelease(tap.cast());
+    }
+
+    TapExit {
+        error: "macOS event tap run loop exited unexpectedly".to_string(),
+        startup_failed: false,
+    }
 }
 
 struct TapContext {
     sender: mpsc::Sender<CaptureSignal>,
-    tracker: Arc<Mutex<HotkeyTracker>>,
-    state: Arc<Mutex<CaptureState>>,
+    tracker: HotkeyTracker,
+    state: CaptureState,
     loopback: Option<SharedLoopbackSuppressor>,
     suppression_enabled: Arc<AtomicBool>,
     exclusive: bool,
@@ -257,10 +362,7 @@ unsafe extern "C" fn raw_callback(
         let raw_dx = cg_event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_X);
         let raw_dy = cg_event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_Y);
         if raw_dx != 0 || raw_dy != 0 {
-            let modifiers = {
-                let state = lock_recovering(&context.state, "capture state");
-                state.modifiers
-            };
+            let modifiers = context.state.modifiers;
             let timestamp_us = SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -282,12 +384,9 @@ unsafe extern "C" fn raw_callback(
         return cg_event.as_ptr();
     };
 
-    let mut tracker = lock_recovering(&context.tracker, "hotkey tracker");
-    let mut state = lock_recovering(&context.state, "capture state");
-
-    match state.translate(
+    match context.state.translate(
         translated_event.clone(),
-        &mut tracker,
+        &mut context.tracker,
         context.loopback.as_ref(),
     ) {
         Some(CaptureSignal::HotkeyPressed) => {
@@ -310,17 +409,6 @@ unsafe extern "C" fn raw_callback(
             }
         }
         None => cg_event.as_ptr(),
-    }
-}
-
-fn lock_recovering<'a, T>(mutex: &'a Arc<Mutex<T>>, label: &'static str) -> MutexGuard<'a, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            warn!(target: "capture", mutex = label, "poisoned mutex, recovering");
-            mutex.clear_poison();
-            poisoned.into_inner()
-        }
     }
 }
 
@@ -367,10 +455,16 @@ fn convert_cg_event(
             let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
             let current_flags = event.get_flags();
             let key = key_from_code(code);
-            let event_type = if current_flags < *last_flags {
-                EventType::KeyRelease(key)
-            } else {
+            // Check the specific modifier bit for this key in current_flags rather
+            // than comparing the full flags word numerically. Numeric comparison
+            // is unreliable when non-modifier system flags (e.g. CGEventFlagNonCoalesced)
+            // are present alongside modifier bits: the total can increase even when
+            // the specific modifier being reported was cleared (release), producing
+            // phantom key-press events.
+            let event_type = if key_flag_is_set(code, current_flags) {
                 EventType::KeyPress(key)
+            } else {
+                EventType::KeyRelease(key)
             };
             *last_flags = current_flags;
             event_type
@@ -394,6 +488,25 @@ fn convert_cg_event(
         name: None,
         event_type,
     })
+}
+
+/// Returns `true` if the modifier bit corresponding to `code` is active in `flags`.
+///
+/// macOS emits one `FlagsChanged` event per modifier key transition and reports
+/// the key code of the key that changed. By testing the specific bit that
+/// belongs to that key we get correct press/release semantics regardless of
+/// what other flag bits (e.g. `CGEventFlagNonCoalesced`) happen to be set.
+fn key_flag_is_set(code: u16, flags: CGEventFlags) -> bool {
+    let mask = match code {
+        56 | 60 => CGEventFlags::CGEventFlagShift,       // ShiftLeft / ShiftRight
+        58 | 61 => CGEventFlags::CGEventFlagAlternate,   // Option left / Option right
+        59 | 62 => CGEventFlags::CGEventFlagControl,     // ControlLeft / ControlRight
+        55 | 54 => CGEventFlags::CGEventFlagCommand,     // Command left / Command right
+        57 => CGEventFlags::CGEventFlagAlphaShift,       // CapsLock
+        63 => CGEventFlags::CGEventFlagSecondaryFn,      // Fn
+        _ => return false, // Unknown modifier key; treat as release to avoid stuck keys
+    };
+    flags.contains(mask)
 }
 
 fn key_from_code(code: u16) -> Key {

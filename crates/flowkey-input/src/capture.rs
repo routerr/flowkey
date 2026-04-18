@@ -334,7 +334,7 @@ impl CaptureState {
         pressed: bool,
         timestamp_us: u64,
     ) -> Option<InputEvent> {
-        let code = normalize_key_code(key)?;
+        let code = normalize_key_code(key)?.to_string();
         let mut modifiers = self.modifiers;
 
         match key {
@@ -385,17 +385,11 @@ mod tests {
 
     #[test]
     fn translates_basic_keys_to_protocol_codes() {
-        assert_eq!(
-            normalize_key_code(rdev::Key::KeyK),
-            Some("KeyK".to_string())
-        );
-        assert_eq!(
-            normalize_key_code(rdev::Key::Num3),
-            Some("Digit3".to_string())
-        );
+        assert_eq!(normalize_key_code(rdev::Key::KeyK), Some("KeyK"));
+        assert_eq!(normalize_key_code(rdev::Key::Num3), Some("Digit3"));
         assert_eq!(
             normalize_key_code(rdev::Key::ControlLeft),
-            Some("ControlLeft".to_string())
+            Some("ControlLeft")
         );
     }
 

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use flowkey_config::{Config, PeerConfig};
 use flowkey_core::recovery::HeldKeyTracker;
 use flowkey_crypto::{NodeIdentity, SessionChallenge, SessionResponse};
@@ -14,7 +14,7 @@ use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{interval, Duration};
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 use crate::frame::{read_message, write_message};
 use crate::heartbeat::HeartbeatConfig;
@@ -64,10 +64,24 @@ impl SessionSender {
             }
             _ => {
                 self.inner.flush_all();
-                self.inner
+                match self
+                    .inner
                     .sender
-                    .send(SessionCommand::Input(event))
-                    .map_err(|_| "session command channel closed".to_string())
+                    .try_send(SessionCommand::Input(event))
+                {
+                    Ok(()) => Ok(()),
+                    Err(TrySendError::Full(_)) => {
+                        // Channel backpressure: the session send loop is lagging.
+                        // Drop this input event rather than blocking the OS capture
+                        // callback (blocking causes CGEventTap timeout on macOS and
+                        // low-level hook timeout on Windows).
+                        warn!("session channel full; dropping input event");
+                        Ok(())
+                    }
+                    Err(TrySendError::Disconnected(_)) => {
+                        Err("session command channel closed".to_string())
+                    }
+                }
             }
         }
     }
@@ -257,14 +271,18 @@ impl SessionSenderInner {
             return Ok(());
         };
 
-        sender
-            .send(SessionCommand::Input(InputEvent::MouseMove {
-                dx: pending.dx,
-                dy: pending.dy,
-                modifiers: pending.modifiers,
-                timestamp_us: pending.timestamp_us,
-            }))
-            .map_err(|_| "session command channel closed".to_string())
+        match sender.try_send(SessionCommand::Input(InputEvent::MouseMove {
+            dx: pending.dx,
+            dy: pending.dy,
+            modifiers: pending.modifiers,
+            timestamp_us: pending.timestamp_us,
+        })) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Ok(()), // drop stale coalesced move; cursor catches up
+            Err(TrySendError::Disconnected(_)) => {
+                Err("session command channel closed".to_string())
+            }
+        }
     }
 
     fn flush_scroll_locked(
@@ -275,14 +293,18 @@ impl SessionSenderInner {
             return Ok(());
         };
 
-        sender
-            .send(SessionCommand::Input(InputEvent::MouseWheel {
-                delta_x: pending.delta_x,
-                delta_y: pending.delta_y,
-                modifiers: pending.modifiers,
-                timestamp_us: pending.timestamp_us,
-            }))
-            .map_err(|_| "session command channel closed".to_string())
+        match sender.try_send(SessionCommand::Input(InputEvent::MouseWheel {
+            delta_x: pending.delta_x,
+            delta_y: pending.delta_y,
+            modifiers: pending.modifiers,
+            timestamp_us: pending.timestamp_us,
+        })) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Ok(()), // drop stale coalesced scroll; user can re-scroll
+            Err(TrySendError::Disconnected(_)) => {
+                Err("session command channel closed".to_string())
+            }
+        }
     }
 
     fn spawn_flush_worker(inner: &Arc<Self>) {
@@ -403,6 +425,10 @@ pub async fn connect_and_authenticate(
     let mut stream = TcpStream::connect(&peer.addr)
         .await
         .with_context(|| format!("failed to connect to {}", peer.addr))?;
+    // Disable Nagle immediately so auth round-trips are not buffered up to 200ms.
+    stream
+        .set_nodelay(true)
+        .context("failed to set TCP_NODELAY on outbound stream")?;
 
     write_message(
         &mut stream,
@@ -515,6 +541,10 @@ pub async fn authenticate_incoming_stream(
     config: &Config,
     mut stream: TcpStream,
 ) -> Result<AuthenticatedConnection> {
+    // Disable Nagle immediately so server-side auth messages bypass OS buffering.
+    stream
+        .set_nodelay(true)
+        .context("failed to set TCP_NODELAY on incoming stream")?;
     let client_hello = match read_message(&mut stream).await? {
         Message::Hello(payload) => payload,
         other => return Err(anyhow!("expected Hello, got {:?}", other)),
@@ -668,7 +698,7 @@ pub async fn run_authenticated_session(
     let mut sequence: u64 = 0;
     let peer_id = connection.info.peer_id.clone();
     let stream = &mut connection.stream;
-    stream.set_nodelay(true)?;
+    // TCP_NODELAY already set at connect/accept time; this is now a no-op kept for safety.
 
     loop {
         tokio::select! {
@@ -725,7 +755,7 @@ pub async fn run_authenticated_session(
 
                 match message {
                     Message::Heartbeat => {
-                        info!(peer = %peer_id, "received heartbeat");
+                        trace!(peer = %peer_id, "received heartbeat");
                     }
                     Message::InputEvent { sequence, event } => {
                         tracing::trace!(peer = %peer_id, sequence, event = ?event, "received input event");

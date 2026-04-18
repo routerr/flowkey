@@ -1,16 +1,24 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
-use flowkey_core::daemon::DaemonRuntime;
+use flowkey_config::Config;
+use flowkey_core::daemon::{DaemonRuntime, DaemonState, Role};
 use flowkey_core::recovery::HeldKeyTracker;
 use flowkey_core::RuntimeSnapshot;
+use flowkey_input::loopback::SharedLoopbackSuppressor;
 use flowkey_input::InputEventSink;
-use flowkey_net::connection::SessionSender;
+use flowkey_net::connection::{
+    run_authenticated_session, session_channel, AuthenticatedConnection, SessionSender,
+};
+use flowkey_net::heartbeat::HeartbeatConfig;
 use tracing::{info, warn};
 
+use crate::platform::{create_platform_input_sink, push_runtime_note};
 use crate::status_writer::refresh_and_persist_status_snapshot;
 
 pub(crate) struct DaemonSessionCallback {
@@ -116,6 +124,119 @@ impl flowkey_net::connection::SessionStateCallback for DaemonSessionCallback {
             }
         }
     }
+}
+
+/// Runs the full session lifecycle after authentication: registers the sender,
+/// resumes any prior control role, creates the platform input sink, runs the
+/// session to completion, and cleans up. Returns the elapsed session duration
+/// so callers can decide whether to reset their reconnect backoff.
+pub(crate) async fn setup_and_run_session(
+    connection: AuthenticatedConnection,
+    remote_addr: Option<SocketAddr>,
+    config: &Config,
+    runtime: &Arc<Mutex<DaemonRuntime>>,
+    status_snapshot: &Arc<ArcSwap<RuntimeSnapshot>>,
+    session_senders: &Arc<Mutex<HashMap<String, SessionSender>>>,
+    loopback: &SharedLoopbackSuppressor,
+    status_path: &PathBuf,
+    suppression_state: &Arc<AtomicBool>,
+) -> Duration {
+    let peer_id = connection.info.peer_id.clone();
+    let resumed_role = runtime
+        .lock()
+        .expect("daemon runtime mutex should not be poisoned")
+        .mark_authenticated(peer_id.clone());
+
+    let (sender, receiver) = session_channel();
+
+    if resumed_role == Some(Role::Controlling) {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        info!(peer = %peer_id, "automatically resuming control session");
+        if let Err(error) = sender.send_switch(request_id) {
+            warn!(peer = %peer_id, %error, "failed to send resume switch request");
+        } else {
+            let mut runtime_guard = runtime
+                .lock()
+                .expect("daemon runtime mutex should not be poisoned");
+            if !matches!(runtime_guard.state, DaemonState::Controlling { .. }) {
+                let _ = runtime_guard.toggle_controller();
+            }
+            suppression_state.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let sender_count = {
+        let mut senders = session_senders
+            .lock()
+            .expect("session sender registry should not be poisoned");
+        senders.insert(peer_id.clone(), sender);
+        senders.len()
+    };
+    refresh_and_persist_status_snapshot(runtime, status_snapshot, status_path);
+    match remote_addr {
+        Some(addr) => info!(
+            peer = %peer_id,
+            remote = %addr,
+            sender_count,
+            "incoming session authenticated and sender registered"
+        ),
+        None => info!(
+            peer = %peer_id,
+            sender_count,
+            "outbound session authenticated and sender registered"
+        ),
+    }
+
+    let (mut sink, backend, note) = create_platform_input_sink(Arc::clone(loopback));
+    {
+        let mut runtime_guard = runtime
+            .lock()
+            .expect("daemon runtime mutex should not be poisoned");
+        runtime_guard.diagnostics.input_injection_backend = backend.to_string();
+        if let Some(note) = note {
+            push_runtime_note(&mut runtime_guard, note);
+        }
+    }
+    refresh_and_persist_status_snapshot(runtime, status_snapshot, status_path);
+
+    let callback = DaemonSessionCallback {
+        runtime: Arc::clone(runtime),
+        status_snapshot: Arc::clone(status_snapshot),
+        status_path: status_path.clone(),
+        suppression_state: Arc::clone(suppression_state),
+        accept_remote_control: config.node.accept_remote_control,
+    };
+    let mut held_keys = HeldKeyTracker::default();
+    let session_start = Instant::now();
+    if let Err(error) = run_authenticated_session(
+        connection,
+        &config.node.id,
+        HeartbeatConfig::default(),
+        sink.as_mut(),
+        &mut held_keys,
+        receiver,
+        &callback,
+    )
+    .await
+    {
+        match remote_addr {
+            Some(addr) => {
+                warn!(peer = %peer_id, remote = %addr, %error, "incoming session ended")
+            }
+            None => warn!(peer = %peer_id, %error, "outbound session ended"),
+        }
+    }
+    cleanup_session(
+        &peer_id,
+        session_senders,
+        runtime,
+        status_snapshot,
+        status_path,
+        suppression_state,
+        &mut held_keys,
+        sink.as_mut(),
+    );
+    session_start.elapsed()
 }
 
 pub(crate) fn cleanup_session(
