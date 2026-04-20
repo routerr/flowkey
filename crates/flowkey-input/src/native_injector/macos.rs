@@ -207,10 +207,16 @@ pub(super) fn post_key_event(
     };
 
     let flags = build_modifier_flags(&sink.current_modifiers);
-    // Use HIDSystemState source for proper system-level keyboard state.
-    // Post at Session level for keyboard to bypass the host's own event tap,
-    // which can interfere with injected events when loopback matching fails.
-    // Mouse must stay at HID level (see mouse injection code).
+    // Use HIDSystemState source (same as mouse-move, which works reliably)
+    // so the event carries proper system-level keyboard state. Post at HID
+    // level so the event enters the full input pipeline — Session-level
+    // posting with a Private source caused events to be silently ignored
+    // by the macOS text input system on some configurations.
+    //
+    // The HID-level event tap will see the injected event, but the loopback
+    // suppressor filters it out (via matches_ignoring_timestamp). Even if
+    // loopback matching fails, the tap passes the event through because
+    // suppress_active is false when this machine is being controlled.
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| "failed to create macOS event source for key event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)
@@ -226,10 +232,9 @@ pub(super) fn post_key_event(
         control = sink.current_modifiers.control,
         alt = sink.current_modifiers.alt,
         meta = sink.current_modifiers.meta,
-        location = "Session",
         "posting macOS keyboard CGEvent"
     );
-    event.post(CGEventTapLocation::Session);
+    event.post(CGEventTapLocation::HID);
     Ok(())
 }
 
