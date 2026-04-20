@@ -302,7 +302,7 @@ fn init_tracing() {
 
     let file_appender = tracing_appender::rolling::never(&log_dir, "flowkey.log");
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,flowkey_daemon=debug,flowkey_net=info"));
+        .unwrap_or_else(|_| EnvFilter::new("info,flowkey_daemon=debug,flowkey_net=debug,keyboard_trace=trace"));
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)

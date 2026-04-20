@@ -891,9 +891,9 @@ pub async fn run_authenticated_session(
                         trace!(peer = %peer_id, "received heartbeat");
                     }
                     Message::InputEvent { sequence, event } => {
-                        tracing::trace!(peer = %peer_id, sequence, event = ?event, "received input event");
+                        tracing::debug!(peer = %peer_id, sequence, event = ?event, "received input event");
                         if let Err(error) = route_input_event(held_keys, sink, &event) {
-                            warn!(peer = %peer_id, %error, "input injection failed, continuing session");
+                            warn!(peer = %peer_id, event = ?event, %error, "input injection failed, continuing session");
                         }
                     }
                     Message::SwitchRequest { peer_id: remote_peer, request_id } => {
