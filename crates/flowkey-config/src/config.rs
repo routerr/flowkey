@@ -12,6 +12,8 @@ use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_INPUT_COALESCE_WINDOW_MS: u64 = 4;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub node: NodeConfig,
@@ -60,6 +62,14 @@ pub struct SwitchConfig {
     pub hotkey: String,
     #[serde(default)]
     pub capture_mode: CaptureMode,
+    #[serde(default = "default_input_coalesce_window_ms")]
+    pub input_coalesce_window_ms: u64,
+}
+
+impl SwitchConfig {
+    pub fn input_coalesce_window(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.input_coalesce_window_ms)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -319,6 +329,7 @@ impl Config {
             switch: SwitchConfig {
                 hotkey: "Ctrl+Alt+Shift+K".to_string(),
                 capture_mode: CaptureMode::Exclusive,
+                input_coalesce_window_ms: DEFAULT_INPUT_COALESCE_WINDOW_MS,
             },
             peers: Vec::new(),
         }
@@ -340,6 +351,7 @@ impl Default for Config {
             switch: SwitchConfig {
                 hotkey: "Ctrl+Alt+Shift+K".to_string(),
                 capture_mode: CaptureMode::Exclusive,
+                input_coalesce_window_ms: DEFAULT_INPUT_COALESCE_WINDOW_MS,
             },
             peers: Vec::new(),
         }
@@ -384,6 +396,10 @@ fn normalize_id(value: &str) -> String {
 
 fn default_accept_remote_control() -> bool {
     true
+}
+
+fn default_input_coalesce_window_ms() -> u64 {
+    DEFAULT_INPUT_COALESCE_WINDOW_MS
 }
 
 fn generate_token_fragment(len: usize) -> String {
@@ -489,6 +505,10 @@ mod tests {
         assert_eq!(decoded.node.id, "local-node");
         assert_eq!(decoded.switch.hotkey, "Ctrl+Alt+Shift+K");
         assert_eq!(decoded.switch.capture_mode, CaptureMode::Exclusive);
+        assert_eq!(
+            decoded.switch.input_coalesce_window_ms,
+            super::DEFAULT_INPUT_COALESCE_WINDOW_MS
+        );
         assert!(decoded.node.accept_remote_control);
         assert_eq!(
             decoded.node.private_key,
@@ -584,6 +604,10 @@ hotkey = "Ctrl+Alt+Shift+K"
         .expect("legacy config should deserialize");
 
         assert_eq!(decoded.switch.capture_mode, CaptureMode::Passive);
+        assert_eq!(
+            decoded.switch.input_coalesce_window_ms,
+            super::DEFAULT_INPUT_COALESCE_WINDOW_MS
+        );
     }
 
     #[test]

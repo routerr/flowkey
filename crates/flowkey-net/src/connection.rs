@@ -12,12 +12,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::channel;
 use tokio::time::{interval, Duration};
 use tracing::{info, trace, warn};
 
 use crate::frame::{read_message, write_message};
 use crate::heartbeat::HeartbeatConfig;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionInfo {
@@ -45,9 +46,27 @@ pub enum SessionCommand {
     ReleaseAll,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SessionSender {
     inner: Arc<SessionSenderInner>,
+}
+
+impl Clone for SessionSender {
+    fn clone(&self) -> Self {
+        self.inner.sender_refs.fetch_add(1, Ordering::SeqCst);
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl Drop for SessionSender {
+    fn drop(&mut self) {
+        if self.inner.sender_refs.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.inner.shutdown.store(true, Ordering::SeqCst);
+            self.inner.coalescer_wake.notify_all();
+        }
+    }
 }
 
 impl SessionSender {
@@ -58,61 +77,37 @@ impl SessionSender {
                 Ok(())
             }
             InputEvent::MouseWheel { .. } => {
-                self.inner.flush_mouse_move();
                 self.inner.queue_scroll(event)?;
                 Ok(())
             }
-            _ => {
-                self.inner.flush_all();
-                match self
-                    .inner
-                    .sender
-                    .try_send(SessionCommand::Input(event))
-                {
-                    Ok(()) => Ok(()),
-                    Err(TrySendError::Full(_)) => {
-                        // Channel backpressure: the session send loop is lagging.
-                        // Drop this input event rather than blocking the OS capture
-                        // callback (blocking causes CGEventTap timeout on macOS and
-                        // low-level hook timeout on Windows).
-                        warn!("session channel full; dropping input event");
-                        Ok(())
-                    }
-                    Err(TrySendError::Disconnected(_)) => {
-                        Err("session command channel closed".to_string())
-                    }
-                }
-            }
+            _ => self.inner.send_immediate_input(event),
         }
     }
 
     pub fn send_switch(&self, request_id: String) -> Result<(), String> {
         self.inner
-            .sender
-            .send(SessionCommand::SwitchControl { request_id })
-            .map_err(|_| "session command channel closed".to_string())
+            .send_control_command(SessionCommand::SwitchControl { request_id })
     }
 
     pub fn send_release(&self, request_id: String) -> Result<(), String> {
         self.inner
-            .sender
-            .send(SessionCommand::ReleaseControl { request_id })
-            .map_err(|_| "session command channel closed".to_string())
+            .send_control_command(SessionCommand::ReleaseControl { request_id })
     }
 
     pub fn send_release_all(&self) -> Result<(), String> {
-        self.inner
-            .sender
-            .send(SessionCommand::ReleaseAll)
-            .map_err(|_| "session command channel closed".to_string())
+        self.inner.send_control_command(SessionCommand::ReleaseAll)
     }
 }
 
 #[derive(Debug)]
 struct SessionSenderInner {
     sender: Sender<SessionCommand>,
+    coalesce_window: Duration,
     coalescer: Mutex<InputCoalescer>,
     coalescer_wake: Condvar,
+    shutdown: AtomicBool,
+    channel_closed: Arc<AtomicBool>,
+    sender_refs: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -140,20 +135,25 @@ struct PendingScroll {
 }
 
 impl SessionSenderInner {
-    fn new(sender: Sender<SessionCommand>) -> Arc<Self> {
+    fn new(sender: Sender<SessionCommand>, coalesce_window: Duration) -> Arc<Self> {
         let inner = Arc::new(Self {
             sender,
+            coalesce_window,
             coalescer: Mutex::new(InputCoalescer {
                 pending_move: None,
                 pending_scroll: None,
             }),
             coalescer_wake: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+            channel_closed: Arc::new(AtomicBool::new(false)),
+            sender_refs: AtomicUsize::new(1),
         });
         Self::spawn_flush_worker(&inner);
         inner
     }
 
     fn queue_mouse_move(&self, event: InputEvent) -> Result<(), String> {
+        self.ensure_channel_open()?;
         let InputEvent::MouseMove {
             dx,
             dy,
@@ -168,6 +168,10 @@ impl SessionSenderInner {
             .coalescer
             .lock()
             .expect("input coalescer mutex should not be poisoned");
+        if let Err(error) = Self::flush_scroll_locked(&self.sender, &mut state) {
+            self.mark_channel_closed();
+            return Err(error);
+        }
         let now = Instant::now();
         match state.pending_move.as_mut() {
             Some(pending) if pending.modifiers == modifiers && now <= pending.deadline => {
@@ -179,13 +183,16 @@ impl SessionSenderInner {
                 // arrive continuously (e.g., rapid mouse movement).
             }
             Some(_) => {
-                Self::flush_move_locked(&self.sender, &mut state)?;
+                if let Err(error) = Self::flush_move_locked(&self.sender, &mut state) {
+                    self.mark_channel_closed();
+                    return Err(error);
+                }
                 state.pending_move = Some(PendingMouseMove {
                     dx,
                     dy,
                     modifiers,
                     timestamp_us,
-                    deadline: now + Duration::from_millis(4),
+                    deadline: now + self.coalesce_window,
                 });
             }
             None => {
@@ -194,7 +201,7 @@ impl SessionSenderInner {
                     dy,
                     modifiers,
                     timestamp_us,
-                    deadline: now + Duration::from_millis(4),
+                    deadline: now + self.coalesce_window,
                 });
             }
         }
@@ -204,6 +211,7 @@ impl SessionSenderInner {
     }
 
     fn queue_scroll(&self, event: InputEvent) -> Result<(), String> {
+        self.ensure_channel_open()?;
         let InputEvent::MouseWheel {
             delta_x,
             delta_y,
@@ -218,6 +226,10 @@ impl SessionSenderInner {
             .coalescer
             .lock()
             .expect("input coalescer mutex should not be poisoned");
+        if let Err(error) = Self::flush_move_locked(&self.sender, &mut state) {
+            self.mark_channel_closed();
+            return Err(error);
+        }
         let now = Instant::now();
         match state.pending_scroll.as_mut() {
             Some(pending) if pending.modifiers == modifiers && now <= pending.deadline => {
@@ -226,13 +238,16 @@ impl SessionSenderInner {
                 pending.timestamp_us = timestamp_us;
             }
             Some(_) => {
-                Self::flush_scroll_locked(&self.sender, &mut state)?;
+                if let Err(error) = Self::flush_scroll_locked(&self.sender, &mut state) {
+                    self.mark_channel_closed();
+                    return Err(error);
+                }
                 state.pending_scroll = Some(PendingScroll {
                     delta_x,
                     delta_y,
                     modifiers,
                     timestamp_us,
-                    deadline: now + Duration::from_millis(4),
+                    deadline: now + self.coalesce_window,
                 });
             }
             None => {
@@ -241,7 +256,7 @@ impl SessionSenderInner {
                     delta_y,
                     modifiers,
                     timestamp_us,
-                    deadline: now + Duration::from_millis(4),
+                    deadline: now + self.coalesce_window,
                 });
             }
         }
@@ -250,17 +265,60 @@ impl SessionSenderInner {
         Ok(())
     }
 
-    fn flush_mouse_move(&self) {
-        if let Ok(mut state) = self.coalescer.lock() {
-            let _ = Self::flush_move_locked(&self.sender, &mut state);
+    fn send_immediate_input(&self, event: InputEvent) -> Result<(), String> {
+        self.ensure_channel_open()?;
+        let mut state = self
+            .coalescer
+            .lock()
+            .expect("input coalescer mutex should not be poisoned");
+        if let Err(error) = Self::flush_move_locked(&self.sender, &mut state) {
+            self.mark_channel_closed();
+            return Err(error);
+        }
+        if let Err(error) = Self::flush_scroll_locked(&self.sender, &mut state) {
+            self.mark_channel_closed();
+            return Err(error);
+        }
+        match self.sender.try_send(SessionCommand::Input(event)) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                warn!("session channel full; dropping input event");
+                Ok(())
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.mark_channel_closed();
+                Err("session command channel closed".to_string())
+            }
         }
     }
 
-    fn flush_all(&self) {
-        if let Ok(mut state) = self.coalescer.lock() {
-            let _ = Self::flush_move_locked(&self.sender, &mut state);
-            let _ = Self::flush_scroll_locked(&self.sender, &mut state);
+    fn send_control_command(&self, command: SessionCommand) -> Result<(), String> {
+        self.ensure_channel_open()?;
+        let mut state = self
+            .coalescer
+            .lock()
+            .expect("input coalescer mutex should not be poisoned");
+        state.pending_move = None;
+        state.pending_scroll = None;
+        self.sender
+            .send(command)
+            .map_err(|_| {
+                self.mark_channel_closed();
+                "session command channel closed".to_string()
+            })
+    }
+
+    fn ensure_channel_open(&self) -> Result<(), String> {
+        if self.channel_closed.load(Ordering::SeqCst) {
+            Err("session command channel closed".to_string())
+        } else {
+            Ok(())
         }
+    }
+
+    fn mark_channel_closed(&self) {
+        self.channel_closed.store(true, Ordering::SeqCst);
+        self.coalescer_wake.notify_all();
     }
 
     fn flush_move_locked(
@@ -309,7 +367,7 @@ impl SessionSenderInner {
 
     fn spawn_flush_worker(inner: &Arc<Self>) {
         let weak = Arc::downgrade(inner);
-        thread::spawn(move || loop {
+        thread::spawn(move || 'worker: loop {
             let Some(inner) = weak.upgrade() else {
                 break;
             };
@@ -320,6 +378,11 @@ impl SessionSenderInner {
                 .expect("input coalescer mutex should not be poisoned");
 
             while state.pending_move.is_none() && state.pending_scroll.is_none() {
+                if inner.shutdown.load(Ordering::SeqCst)
+                    || inner.channel_closed.load(Ordering::SeqCst)
+                {
+                    break 'worker;
+                }
                 state = inner
                     .coalescer_wake
                     .wait(state)
@@ -340,6 +403,15 @@ impl SessionSenderInner {
                     .expect("input coalescer mutex should not be poisoned");
                 state = next_state;
 
+                if inner.shutdown.load(Ordering::SeqCst) {
+                    state.pending_move = None;
+                    state.pending_scroll = None;
+                    break 'worker;
+                }
+                if inner.channel_closed.load(Ordering::SeqCst) {
+                    break 'worker;
+                }
+
                 // Re-check: if the earliest pending item is still in the future,
                 // loop again to allow further coalescing.
                 if let Some(d) = earliest_deadline(&state) {
@@ -350,20 +422,31 @@ impl SessionSenderInner {
             }
 
             // Flush whichever pending items have reached their deadline.
+            if inner.shutdown.load(Ordering::SeqCst) {
+                state.pending_move = None;
+                state.pending_scroll = None;
+                break;
+            }
             let now = Instant::now();
             if state
                 .pending_move
                 .as_ref()
                 .is_some_and(|p| now >= p.deadline)
             {
-                let _ = Self::flush_move_locked(&inner.sender, &mut state);
+                if Self::flush_move_locked(&inner.sender, &mut state).is_err() {
+                    inner.mark_channel_closed();
+                    break;
+                }
             }
             if state
                 .pending_scroll
                 .as_ref()
                 .is_some_and(|p| now >= p.deadline)
             {
-                let _ = Self::flush_scroll_locked(&inner.sender, &mut state);
+                if Self::flush_scroll_locked(&inner.sender, &mut state).is_err() {
+                    inner.mark_channel_closed();
+                    break;
+                }
             }
         });
     }
@@ -378,13 +461,54 @@ fn earliest_deadline(state: &InputCoalescer) -> Option<Instant> {
     }
 }
 
-pub fn session_channel() -> (SessionSender, Receiver<SessionCommand>) {
+pub struct SessionCommandReceiver {
+    inner: Receiver<SessionCommand>,
+    channel_closed: Arc<AtomicBool>,
+    wake: std::sync::Weak<SessionSenderInner>,
+}
+
+impl SessionCommandReceiver {
+    pub fn recv(&self) -> Result<SessionCommand, crossbeam_channel::RecvError> {
+        self.inner.recv()
+    }
+
+    pub fn recv_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<SessionCommand, crossbeam_channel::RecvTimeoutError> {
+        self.inner.recv_timeout(timeout)
+    }
+
+    pub fn try_recv(&self) -> Result<SessionCommand, crossbeam_channel::TryRecvError> {
+        self.inner.try_recv()
+    }
+}
+
+impl Drop for SessionCommandReceiver {
+    fn drop(&mut self) {
+        self.channel_closed.store(true, Ordering::SeqCst);
+        if let Some(inner) = self.wake.upgrade() {
+            inner.coalescer_wake.notify_all();
+        }
+    }
+}
+
+pub fn session_channel() -> (SessionSender, SessionCommandReceiver) {
+    session_channel_with_coalesce_window(flowkey_config::DEFAULT_INPUT_COALESCE_WINDOW_MS)
+}
+
+pub fn session_channel_with_coalesce_window(
+    coalesce_window_ms: u64,
+) -> (SessionSender, SessionCommandReceiver) {
     let (sender, receiver) = bounded(100);
+    let inner = SessionSenderInner::new(sender, Duration::from_millis(coalesce_window_ms));
     (
-        SessionSender {
-            inner: SessionSenderInner::new(sender),
+        SessionSender { inner: Arc::clone(&inner) },
+        SessionCommandReceiver {
+            inner: receiver,
+            channel_closed: Arc::clone(&inner.channel_closed),
+            wake: Arc::downgrade(&inner),
         },
-        receiver,
     )
 }
 
@@ -678,17 +802,26 @@ pub async fn run_authenticated_session(
     heartbeat: HeartbeatConfig,
     sink: &mut dyn flowkey_input::InputEventSink,
     held_keys: &mut HeldKeyTracker,
-    outbound: Receiver<SessionCommand>,
+    outbound: SessionCommandReceiver,
     state_callback: &dyn SessionStateCallback,
 ) -> Result<()> {
-    let (bridge_tx, mut bridge_rx) = unbounded_channel();
-    let bridge_outbound = outbound.clone();
+    let (bridge_tx, mut bridge_rx) = channel(100);
 
     // Spawn a blocking task to bridge crossbeam channel to tokio
     tokio::task::spawn_blocking(move || {
-        while let Ok(command) = bridge_outbound.recv() {
-            if bridge_tx.send(command).is_err() {
-                break;
+        loop {
+            match outbound.recv_timeout(Duration::from_millis(100)) {
+                Ok(command) => {
+                    if bridge_tx.blocking_send(command).is_err() {
+                        break;
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    if bridge_tx.is_closed() {
+                        break;
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             }
         }
     });
@@ -1181,6 +1314,13 @@ mod tests {
     }
 
     #[test]
+    fn configured_window_is_stored_on_sender() {
+        let (sender, _receiver) = session_channel_with_coalesce_window(25);
+
+        assert_eq!(sender.inner.coalesce_window, Duration::from_millis(25));
+    }
+
+    #[test]
     fn scroll_events_within_window_are_coalesced_before_flush() {
         let (sender, receiver) = session_channel();
         let modifiers = Modifiers::none();
@@ -1307,6 +1447,96 @@ mod tests {
             third,
             SessionCommand::Input(InputEvent::KeyDown {
                 code: "KeyA".to_string(),
+                modifiers,
+                timestamp_us: 20,
+            })
+        );
+    }
+
+    #[test]
+    fn release_discards_buffered_coalesced_input() {
+        let (sender, receiver) = session_channel();
+        let modifiers = Modifiers::none();
+
+        sender
+            .send_input(InputEvent::MouseMove {
+                dx: 2,
+                dy: 3,
+                modifiers,
+                timestamp_us: 10,
+            })
+            .expect("move should queue");
+        sender
+            .send_release("req-1".to_string())
+            .expect("release should queue");
+
+        let first = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("release command");
+        assert_eq!(
+            first,
+            SessionCommand::ReleaseControl {
+                request_id: "req-1".to_string()
+            }
+        );
+        assert!(
+            receiver
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err(),
+            "buffered input should be discarded before release"
+        );
+    }
+
+    #[test]
+    fn scroll_before_move_preserves_original_order() {
+        let (sender, receiver) = session_channel();
+        let modifiers = Modifiers::none();
+
+        sender
+            .send_input(InputEvent::MouseWheel {
+                delta_x: 0,
+                delta_y: 3,
+                modifiers,
+                timestamp_us: 10,
+            })
+            .expect("scroll should queue");
+        sender
+            .send_input(InputEvent::MouseMove {
+                dx: 2,
+                dy: 4,
+                modifiers,
+                timestamp_us: 20,
+            })
+            .expect("move should flush prior scroll and queue");
+        sender
+            .send_input(InputEvent::KeyDown {
+                code: "KeyK".to_string(),
+                modifiers,
+                timestamp_us: 30,
+            })
+            .expect("key should flush pending move");
+
+        let first = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("scroll flush");
+        assert_eq!(
+            first,
+            SessionCommand::Input(InputEvent::MouseWheel {
+                delta_x: 0,
+                delta_y: 3,
+                modifiers,
+                timestamp_us: 10,
+            })
+        );
+
+        let second = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("move flush");
+        assert_eq!(
+            second,
+            SessionCommand::Input(InputEvent::MouseMove {
+                dx: 2,
+                dy: 4,
                 modifiers,
                 timestamp_us: 20,
             })

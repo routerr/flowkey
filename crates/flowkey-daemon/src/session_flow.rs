@@ -13,7 +13,8 @@ use flowkey_core::RuntimeSnapshot;
 use flowkey_input::loopback::SharedLoopbackSuppressor;
 use flowkey_input::InputEventSink;
 use flowkey_net::connection::{
-    run_authenticated_session, session_channel, AuthenticatedConnection, SessionSender,
+    run_authenticated_session, session_channel_with_coalesce_window, AuthenticatedConnection,
+    SessionSender,
 };
 use flowkey_net::heartbeat::HeartbeatConfig;
 use tracing::{info, warn};
@@ -147,7 +148,8 @@ pub(crate) async fn setup_and_run_session(
         .expect("daemon runtime mutex should not be poisoned")
         .mark_authenticated(peer_id.clone());
 
-    let (sender, receiver) = session_channel();
+    let (sender, receiver) =
+        session_channel_with_coalesce_window(config.switch.input_coalesce_window_ms);
 
     if resumed_role == Some(Role::Controlling) {
         let request_id = uuid::Uuid::new_v4().to_string();

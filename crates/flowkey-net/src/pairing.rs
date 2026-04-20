@@ -155,6 +155,7 @@ mod tests {
             switch: SwitchConfig {
                 hotkey: "Ctrl+Alt+Shift+K".to_string(),
                 capture_mode: CaptureMode::Passive,
+                input_coalesce_window_ms: flowkey_config::DEFAULT_INPUT_COALESCE_WINDOW_MS,
             },
             peers: Vec::new(),
         }

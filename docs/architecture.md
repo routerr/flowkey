@@ -363,6 +363,7 @@ listen_addr = "0.0.0.0:48571"
 
 [switch]
 hotkey = "Ctrl+Alt+Shift+K"
+input_coalesce_window_ms = 4
 
 [[peers]]
 id = "office-pc"

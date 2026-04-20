@@ -215,6 +215,7 @@ private_key = "base64:..."
 
 [switch]
 hotkey = "Ctrl+Alt+Shift+K"
+input_coalesce_window_ms = 4
 
 [[peers]]
 id = "office-pc"
