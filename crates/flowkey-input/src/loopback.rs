@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::event::InputEvent;
-use tracing::warn;
+use tracing::{debug, warn};
 
 #[derive(Debug)]
 pub struct LoopbackSuppressor {
@@ -46,6 +46,12 @@ impl LoopbackSuppressor {
 
     pub fn record(&mut self, event: InputEvent) {
         self.purge_expired();
+        debug!(
+            target: "keyboard_trace",
+            platform = "loopback",
+            event = ?event,
+            "loopback suppressor recording injected event"
+        );
         self.recent.push_back(RecordedEvent {
             recorded_at: Instant::now(),
             event,
@@ -60,10 +66,24 @@ impl LoopbackSuppressor {
             .iter()
             .position(|recorded| recorded.event.matches_ignoring_timestamp(event))
         {
+            debug!(
+                target: "keyboard_trace",
+                platform = "loopback",
+                event = ?event,
+                matched_recorded_event = ?self.recent[index].event,
+                "loopback suppressor matched and will suppress event"
+            );
             self.recent.remove(index);
             return true;
         }
 
+        debug!(
+            target: "keyboard_trace",
+            platform = "loopback",
+            event = ?event,
+            recent_count = self.recent.len(),
+            "loopback suppressor did not match event, allowing through"
+        );
         false
     }
 
