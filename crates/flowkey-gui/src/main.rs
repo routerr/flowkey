@@ -178,11 +178,11 @@ async fn remove_peer(peer_id: String) -> Result<(), String> {
 #[tauri::command]
 async fn switch_to_peer(peer_id: String) -> Result<(), String> {
     tracing::info!(peer_id = %peer_id, "gui: switch_to_peer invoked");
-    let control_path = Config::control_path().map_err(|e| e.to_string())?;
     let cmd = flowkey_core::DaemonCommand::switch(peer_id.clone());
 
     #[cfg(target_os = "macos")]
     {
+        let control_path = Config::control_path().map_err(|e| e.to_string())?;
         let socket_path = control_path.with_extension("sock");
         if !socket_path.exists() {
             tracing::warn!(path = %socket_path.display(), "gui: daemon control socket missing");
@@ -218,17 +218,20 @@ async fn switch_to_peer(peer_id: String) -> Result<(), String> {
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    cmd.save_to_path(&control_path).map_err(|e| e.to_string())
+    {
+        let control_path = Config::control_path().map_err(|e| e.to_string())?;
+        cmd.save_to_path(&control_path).map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
 async fn release_control() -> Result<(), String> {
     tracing::info!("gui: release_control invoked");
-    let control_path = Config::control_path().map_err(|e| e.to_string())?;
     let cmd = flowkey_core::DaemonCommand::release();
 
     #[cfg(target_os = "macos")]
     {
+        let control_path = Config::control_path().map_err(|e| e.to_string())?;
         let socket_path = control_path.with_extension("sock");
         if !socket_path.exists() {
             tracing::warn!(path = %socket_path.display(), "gui: daemon control socket missing");
@@ -264,7 +267,10 @@ async fn release_control() -> Result<(), String> {
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    cmd.save_to_path(&control_path).map_err(|e| e.to_string())
+    {
+        let control_path = Config::control_path().map_err(|e| e.to_string())?;
+        cmd.save_to_path(&control_path).map_err(|e| e.to_string())
+    }
 }
 
 fn request_daemon_shutdown(app: tauri::AppHandle) {
