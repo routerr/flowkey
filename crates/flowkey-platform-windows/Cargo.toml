@@ -6,6 +6,9 @@ license.workspace = true
 
 [dependencies]
 flowkey-input = { path = "../flowkey-input" }
-rdev = { version = "0.5.3", features = ["unstable_grab"] }
+rdev = "0.5.3"
 tracing.workspace = true
-windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+] }

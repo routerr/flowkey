@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
+use std::ffi::c_void;
+use std::ptr::null_mut;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -8,10 +10,18 @@ use flowkey_input::capture::{CaptureSignal, CaptureState, InputCapture, LocalInp
 use flowkey_input::event::InputEvent;
 use flowkey_input::hotkey::{HotkeyBinding, HotkeyTracker};
 use flowkey_input::loopback::SharedLoopbackSuppressor;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
+use windows_sys::Win32::Foundation::{GetLastError, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CallNextHookEx, GetMessageW, SetWindowsHookExW,
+    UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT, MSG,
+    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SYSKEYDOWN,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, WHEEL_DELTA,
 };
 
 pub struct WindowsCapture {
@@ -162,6 +172,400 @@ impl InputCapture for WindowsExclusiveCapture {
     }
 }
 
+// Thread-local hook state — lives on the grab thread, so no cross-thread contention.
+use std::cell::RefCell;
+use std::sync::atomic::AtomicIsize;
+
+// HHOOK = *mut c_void; store as isize for atomic access.
+static NATIVE_KEYBOARD_HOOK: AtomicIsize = AtomicIsize::new(0);
+static NATIVE_MOUSE_HOOK: AtomicIsize = AtomicIsize::new(0);
+
+fn hook_to_isize(h: HHOOK) -> isize { h as isize }
+fn isize_to_hook(v: isize) -> HHOOK { v as *mut c_void }
+
+struct NativeGrabState {
+    tracker: HotkeyTracker,
+    capture_state: CaptureState,
+    loopback: Option<SharedLoopbackSuppressor>,
+    suppression_enabled: Arc<AtomicBool>,
+    sender: mpsc::Sender<CaptureSignal>,
+    pending_recenter: Option<(f64, f64)>,
+}
+
+thread_local! {
+    static GRAB_STATE: RefCell<Option<NativeGrabState>> = const { RefCell::new(None) };
+}
+
+unsafe extern "system" fn native_keyboard_proc(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if code == HC_ACTION as i32 {
+        let suppress = GRAB_STATE
+            .try_with(|cell| {
+                cell.try_borrow_mut()
+                    .ok()
+                    .and_then(|mut guard| guard.as_mut().map(|s| handle_keyboard(s, wparam, lparam)))
+            })
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+        if suppress {
+            return 1;
+        }
+    }
+    let hook = isize_to_hook(NATIVE_KEYBOARD_HOOK.load(Ordering::SeqCst));
+    CallNextHookEx(hook, code, wparam, lparam)
+}
+
+unsafe extern "system" fn native_mouse_proc(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if code == HC_ACTION as i32 {
+        let suppress = GRAB_STATE
+            .try_with(|cell| {
+                cell.try_borrow_mut()
+                    .ok()
+                    .and_then(|mut guard| guard.as_mut().map(|s| handle_mouse(s, wparam, lparam)))
+            })
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+        if suppress {
+            return 1;
+        }
+    }
+    let hook = isize_to_hook(NATIVE_MOUSE_HOOK.load(Ordering::SeqCst));
+    CallNextHookEx(hook, code, wparam, lparam)
+}
+
+fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) -> bool {
+    let pressed = matches!(wparam as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+    let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+    let vk = kb.vkCode as u16;
+
+    let rdev_key = rdev_key_from_vk(vk);
+    let timestamp_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+
+    let input_event = state
+        .capture_state
+        .translate_key_event(rdev_key, pressed, timestamp_us);
+
+    let Some(input) = input_event else {
+        // normalize_key_code returned None — unknown key, let it pass through
+        debug!(
+            target: "keyboard_trace",
+            platform = "windows",
+            vk_code = vk,
+            pressed,
+            "keyboard event has no protocol mapping, passing through"
+        );
+        return false;
+    };
+
+    // Check loopback suppressor (event was injected by us, skip forwarding)
+    if let Some(loopback) = &state.loopback {
+        if let Ok(mut lb) = loopback.lock() {
+            if lb.should_suppress(&input) {
+                return false; // pass through; injection will take effect
+            }
+        }
+    }
+
+    let suppress_local = state.suppression_enabled.load(Ordering::SeqCst);
+
+    match state.tracker.process(&input) {
+        flowkey_input::hotkey::HotkeyOutcome::Pressed => {
+            let _ = state.sender.send(CaptureSignal::HotkeyPressed);
+            return false; // pass hotkey chord through so modifier keys don't get stuck
+        }
+        flowkey_input::hotkey::HotkeyOutcome::Suppressed => {
+            return true; // suppress chord release sequence
+        }
+        flowkey_input::hotkey::HotkeyOutcome::Forward => {}
+    }
+
+    if let InputEvent::KeyDown {
+        ref code,
+        ref modifiers,
+        timestamp_us,
+    }
+    | InputEvent::KeyUp {
+        ref code,
+        ref modifiers,
+        timestamp_us,
+    } = input
+    {
+        debug!(
+            target: "keyboard_trace",
+            platform = "windows",
+            code = %code,
+            pressed,
+            shift = modifiers.shift,
+            control = modifiers.control,
+            alt = modifiers.alt,
+            meta = modifiers.meta,
+            timestamp_us,
+            suppress_local,
+            "forwarding keyboard event from Windows capture"
+        );
+    }
+
+    let _ = state.sender.send(CaptureSignal::Input(input));
+    suppress_local
+}
+
+fn handle_mouse(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) -> bool {
+    let mouse = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
+    let timestamp_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+
+    use flowkey_input::event::MouseButton;
+    use flowkey_input::normalize::normalize_wheel_delta;
+
+    let modifiers = state.capture_state.modifiers;
+
+    let input_event = match wparam as u32 {
+        WM_MOUSEMOVE => {
+            let x = mouse.pt.x as f64;
+            let y = mouse.pt.y as f64;
+            let last = state.capture_state.last_mouse_position;
+            state.capture_state.last_mouse_position = Some((x, y));
+
+            // Consume synthetic recentering move
+            if let Some(target) = state.pending_recenter {
+                if (x - target.0).abs() <= 1.0 && (y - target.1).abs() <= 1.0 {
+                    state.pending_recenter = None;
+                    return false; // discard, don't forward
+                }
+            }
+
+            if let Some((lx, ly)) = last {
+                let dx = (x - lx).round() as i32;
+                let dy = (y - ly).round() as i32;
+                if dx == 0 && dy == 0 {
+                    return false;
+                }
+                Some(InputEvent::MouseMove {
+                    dx,
+                    dy,
+                    modifiers,
+                    timestamp_us,
+                })
+            } else {
+                None
+            }
+        }
+        WM_LBUTTONDOWN => Some(InputEvent::MouseButtonDown {
+            button: MouseButton::Left,
+            modifiers,
+            timestamp_us,
+        }),
+        WM_LBUTTONUP => Some(InputEvent::MouseButtonUp {
+            button: MouseButton::Left,
+            modifiers,
+            timestamp_us,
+        }),
+        WM_RBUTTONDOWN => Some(InputEvent::MouseButtonDown {
+            button: MouseButton::Right,
+            modifiers,
+            timestamp_us,
+        }),
+        WM_RBUTTONUP => Some(InputEvent::MouseButtonUp {
+            button: MouseButton::Right,
+            modifiers,
+            timestamp_us,
+        }),
+        WM_MBUTTONDOWN => Some(InputEvent::MouseButtonDown {
+            button: MouseButton::Middle,
+            modifiers,
+            timestamp_us,
+        }),
+        WM_MBUTTONUP => Some(InputEvent::MouseButtonUp {
+            button: MouseButton::Middle,
+            modifiers,
+            timestamp_us,
+        }),
+        WM_MOUSEWHEEL => {
+            let raw_delta = (((mouse.mouseData >> 16) & 0xFFFF) as i16) as i32;
+            let ticks = raw_delta / WHEEL_DELTA as i32;
+            if ticks == 0 {
+                None
+            } else {
+                normalize_wheel_delta(0.0, ticks as f64).map(|(dx, dy)| InputEvent::MouseWheel {
+                    delta_x: dx,
+                    delta_y: dy,
+                    modifiers,
+                    timestamp_us,
+                })
+            }
+        }
+        _ => None,
+    };
+
+    let Some(input) = input_event else {
+        return false;
+    };
+
+    // Loopback check
+    if let Some(loopback) = &state.loopback {
+        if let Ok(mut lb) = loopback.lock() {
+            if lb.should_suppress(&input) {
+                return false;
+            }
+        }
+    }
+
+    let suppress_local = state.suppression_enabled.load(Ordering::SeqCst);
+
+    if suppress_local {
+        if let InputEvent::MouseMove { dx, dy, .. } = &input {
+            let saved = state.capture_state.last_mouse_position;
+            if let Some(center) = recenter_cursor_to_virtual_center() {
+                debug!(
+                    dx,
+                    dy,
+                    center_x = center.0,
+                    center_y = center.1,
+                    "recentering suppressed Windows cursor"
+                );
+                state.capture_state.last_mouse_position = Some(center);
+                state.pending_recenter = Some(center);
+            } else {
+                state.capture_state.last_mouse_position = saved;
+            }
+        }
+    }
+
+    let _ = state.sender.send(CaptureSignal::Input(input));
+    suppress_local
+}
+
+/// Map Windows virtual key code to rdev::Key (mirrors rdev's key_from_code).
+fn rdev_key_from_vk(vk: u16) -> rdev::Key {
+    use rdev::Key;
+    match vk {
+        65 => Key::KeyA,
+        66 => Key::KeyB,
+        67 => Key::KeyC,
+        68 => Key::KeyD,
+        69 => Key::KeyE,
+        70 => Key::KeyF,
+        71 => Key::KeyG,
+        72 => Key::KeyH,
+        73 => Key::KeyI,
+        74 => Key::KeyJ,
+        75 => Key::KeyK,
+        76 => Key::KeyL,
+        77 => Key::KeyM,
+        78 => Key::KeyN,
+        79 => Key::KeyO,
+        80 => Key::KeyP,
+        81 => Key::KeyQ,
+        82 => Key::KeyR,
+        83 => Key::KeyS,
+        84 => Key::KeyT,
+        85 => Key::KeyU,
+        86 => Key::KeyV,
+        87 => Key::KeyW,
+        88 => Key::KeyX,
+        89 => Key::KeyY,
+        90 => Key::KeyZ,
+        48 => Key::Num0,
+        49 => Key::Num1,
+        50 => Key::Num2,
+        51 => Key::Num3,
+        52 => Key::Num4,
+        53 => Key::Num5,
+        54 => Key::Num6,
+        55 => Key::Num7,
+        56 => Key::Num8,
+        57 => Key::Num9,
+        // Function keys
+        112 => Key::F1,
+        113 => Key::F2,
+        114 => Key::F3,
+        115 => Key::F4,
+        116 => Key::F5,
+        117 => Key::F6,
+        118 => Key::F7,
+        119 => Key::F8,
+        120 => Key::F9,
+        121 => Key::F10,
+        122 => Key::F11,
+        123 => Key::F12,
+        // Navigation
+        37 => Key::LeftArrow,
+        38 => Key::UpArrow,
+        39 => Key::RightArrow,
+        40 => Key::DownArrow,
+        36 => Key::Home,
+        35 => Key::End,
+        33 => Key::PageUp,
+        34 => Key::PageDown,
+        45 => Key::Insert,
+        46 => Key::Delete,
+        // Special
+        8 => Key::Backspace,
+        9 => Key::Tab,
+        13 => Key::Return,
+        27 => Key::Escape,
+        32 => Key::Space,
+        // Modifiers
+        160 => Key::ShiftLeft,
+        161 => Key::ShiftRight,
+        162 => Key::ControlLeft,
+        163 => Key::ControlRight,
+        164 => Key::Alt,
+        165 => Key::AltGr,
+        91 => Key::MetaLeft,
+        92 => Key::MetaRight,
+        // Locks
+        20 => Key::CapsLock,
+        144 => Key::NumLock,
+        145 => Key::ScrollLock,
+        // Numpad
+        96 => Key::Kp0,
+        97 => Key::Kp1,
+        98 => Key::Kp2,
+        99 => Key::Kp3,
+        100 => Key::Kp4,
+        101 => Key::Kp5,
+        102 => Key::Kp6,
+        103 => Key::Kp7,
+        104 => Key::Kp8,
+        105 => Key::Kp9,
+        110 => Key::KpDelete,
+        107 => Key::KpPlus,
+        109 => Key::KpMinus,
+        106 => Key::KpMultiply,
+        111 => Key::KpDivide,
+        // Punctuation
+        192 => Key::BackQuote,
+        189 => Key::Minus,
+        187 => Key::Equal,
+        219 => Key::LeftBracket,
+        221 => Key::RightBracket,
+        220 => Key::BackSlash,
+        186 => Key::SemiColon,
+        222 => Key::Quote,
+        188 => Key::Comma,
+        190 => Key::Dot,
+        191 => Key::Slash,
+        44 => Key::PrintScreen,
+        19 => Key::Pause,
+        _ => Key::Unknown(vk as u32),
+    }
+}
+
 fn spawn_grab_thread(
     binding: HotkeyBinding,
     loopback: Option<SharedLoopbackSuppressor>,
@@ -169,140 +573,71 @@ fn spawn_grab_thread(
     sender: mpsc::Sender<CaptureSignal>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let tracker = Arc::new(Mutex::new(HotkeyTracker::new(binding)));
-        let state = Arc::new(Mutex::new(CaptureState::default()));
-        let pending_recenter = Arc::new(Mutex::new(None::<(f64, f64)>));
+        // Install keyboard and mouse hooks with separate HHOOKs.
+        // Using direct Win32 API avoids rdev's shared HHOOK bug where
+        // set_mouse_hook() overwrites the keyboard HHOOK handle.
+        let kb_hook: HHOOK = unsafe {
+            SetWindowsHookExW(WH_KEYBOARD_LL, Some(native_keyboard_proc), null_mut(), 0)
+        };
+        if kb_hook.is_null() {
+            let err = unsafe { GetLastError() };
+            warn!(error_code = err, "failed to install WH_KEYBOARD_LL hook");
+            return;
+        }
+        NATIVE_KEYBOARD_HOOK.store(hook_to_isize(kb_hook), Ordering::SeqCst);
+        info!("WH_KEYBOARD_LL hook installed");
 
-        let grab_tracker = Arc::clone(&tracker);
-        let grab_state = Arc::clone(&state);
-        let grab_pending_recenter = Arc::clone(&pending_recenter);
-        let result = rdev::grab(move |event: rdev::Event| {
-            if consume_pending_recenter_event(
-                &event,
-                &mut grab_pending_recenter.lock().unwrap(),
-            ) {
-                if let rdev::EventType::MouseMove { x, y } = event.event_type {
-                    if let Ok(mut state) = grab_state.lock() {
-                        state.last_mouse_position = Some((x, y));
-                    }
-                }
-                return None;
-            }
+        let ms_hook: HHOOK = unsafe {
+            SetWindowsHookExW(WH_MOUSE_LL, Some(native_mouse_proc), null_mut(), 0)
+        };
+        if ms_hook.is_null() {
+            let err = unsafe { GetLastError() };
+            warn!(error_code = err, "failed to install WH_MOUSE_LL hook");
+            unsafe { UnhookWindowsHookEx(kb_hook) };
+            NATIVE_KEYBOARD_HOOK.store(0, Ordering::SeqCst);
+            return;
+        }
+        NATIVE_MOUSE_HOOK.store(hook_to_isize(ms_hook), Ordering::SeqCst);
+        info!("WH_MOUSE_LL hook installed");
 
-            let mut tracker = grab_tracker.lock().unwrap();
-            let mut state = grab_state.lock().unwrap();
-
-            let saved_mouse_position = state.last_mouse_position;
-            let signal = state.translate(event.clone(), &mut tracker, loopback.as_ref());
-            if let Some(signal) = signal {
-                match signal {
-                    CaptureSignal::HotkeyPressed => {
-                        let _ = sender.send(signal);
-                        Some(event)
-                    }
-                    CaptureSignal::HotkeySuppressed => {
-                        // Don't forward hotkey releases over the network, but ALWAYS pass them
-                        // to the local OS to prevent modifier keys from getting stuck when releasing control.
-                        Some(event)
-                    }
-                    CaptureSignal::Input(input) => {
-                        if let InputEvent::KeyDown {
-                            code,
-                            modifiers,
-                            timestamp_us,
-                        }
-                        | InputEvent::KeyUp {
-                            code,
-                            modifiers,
-                            timestamp_us,
-                        } = &input
-                        {
-                            debug!(
-                                target: "keyboard_trace",
-                                platform = "windows",
-                                code = %code,
-                                pressed = matches!(input, InputEvent::KeyDown { .. }),
-                                shift = modifiers.shift,
-                                control = modifiers.control,
-                                alt = modifiers.alt,
-                                meta = modifiers.meta,
-                                timestamp_us = *timestamp_us,
-                                suppression_enabled = suppression_enabled.load(Ordering::SeqCst),
-                                "forwarding keyboard event from Windows capture"
-                            );
-                        }
-                        let _ = sender.send(CaptureSignal::Input(input.clone()));
-                        if suppression_enabled.load(Ordering::SeqCst) {
-                            if matches!(input, InputEvent::MouseMove { .. }) {
-                                if let Some(center) = recenter_cursor_to_virtual_center() {
-                                    if let InputEvent::MouseMove { dx, dy, .. } = input {
-                                        debug!(
-                                            dx,
-                                            dy,
-                                            center_x = center.0,
-                                            center_y = center.1,
-                                            "recentering suppressed Windows cursor after forwarded mouse move"
-                                        );
-                                    }
-                                    // Immediately update baseline to center position.
-                                    // This eliminates the race window between SetCursorPos
-                                    // and the synthetic move event arriving in the hook.
-                                    state.last_mouse_position = Some(center);
-                                    *grab_pending_recenter.lock().unwrap() = Some(center);
-                                } else {
-                                    // Fall back to the old behavior if we fail to recenter.
-                                    if let InputEvent::MouseMove { dx, dy, .. } = input {
-                                        debug!(
-                                            dx,
-                                            dy,
-                                            "failed to recenter suppressed Windows cursor; preserving previous baseline"
-                                        );
-                                    }
-                                    state.last_mouse_position = saved_mouse_position;
-                                }
-                            } else {
-                                // The OS cursor stays in place for suppressed non-mouse-move
-                                // events, so preserve the pre-event coordinate baseline.
-                                state.last_mouse_position = saved_mouse_position;
-                            }
-                            None
-                        } else {
-                            Some(event)
-                        }
-                    }
-                }
-            } else {
-                // Event was suppressed by loopback (it was injected by us).
-                // Don't forward it over the network, but DO pass it through
-                // to the OS so the injection actually takes effect.
-                Some(event)
-            }
+        // Populate thread-local state so callbacks can access it.
+        GRAB_STATE.with(|cell| {
+            *cell.borrow_mut() = Some(NativeGrabState {
+                tracker: HotkeyTracker::new(binding),
+                capture_state: CaptureState::default(),
+                loopback,
+                suppression_enabled,
+                sender,
+                pending_recenter: None,
+            });
         });
 
-        if let Err(error) = result {
-            warn!(error = ?error, "Windows exclusive capture (grab) stopped");
+        // Run the message pump.  GetMessageW blocks until WM_QUIT is posted.
+        let mut msg = MSG {
+            hwnd: null_mut(),
+            message: 0,
+            wParam: 0,
+            lParam: 0,
+            time: 0,
+            pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+        };
+        loop {
+            let ret = unsafe { GetMessageW(&mut msg, null_mut(), 0, 0) };
+            match ret {
+                0 | -1 => break, // WM_QUIT or error
+                _ => {}          // hook callbacks already ran inside GetMessageW
+            }
         }
+
+        // Clean up hooks before the thread exits.
+        GRAB_STATE.with(|cell| drop(cell.borrow_mut().take()));
+        unsafe {
+            UnhookWindowsHookEx(kb_hook);
+            UnhookWindowsHookEx(ms_hook);
+        }
+        NATIVE_KEYBOARD_HOOK.store(0, Ordering::SeqCst);
+        NATIVE_MOUSE_HOOK.store(0, Ordering::SeqCst);
     })
-}
-
-fn consume_pending_recenter_event(
-    event: &rdev::Event,
-    pending_recenter: &mut Option<(f64, f64)>,
-) -> bool {
-    let Some(target) = pending_recenter.as_ref().copied() else {
-        return false;
-    };
-
-    let rdev::EventType::MouseMove { x, y } = event.event_type else {
-        return false;
-    };
-
-    if (x - target.0).abs() <= 1.0 && (y - target.1).abs() <= 1.0 {
-        *pending_recenter = None;
-        true
-    } else {
-        false
-    }
 }
 
 fn recenter_cursor_to_virtual_center() -> Option<(f64, f64)> {
@@ -322,36 +657,5 @@ fn recenter_cursor_to_virtual_center() -> Option<(f64, f64)> {
         None
     } else {
         Some((f64::from(center_x), f64::from(center_y)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::consume_pending_recenter_event;
-
-    #[test]
-    fn consumes_matching_recentering_move_once() {
-        let mut pending = Some((500.0, 400.0));
-        let event = rdev::Event {
-            event_type: rdev::EventType::MouseMove { x: 500.0, y: 400.0 },
-            time: std::time::SystemTime::now(),
-            name: None,
-        };
-
-        assert!(consume_pending_recenter_event(&event, &mut pending));
-        assert_eq!(pending, None);
-    }
-
-    #[test]
-    fn ignores_unrelated_mouse_move() {
-        let mut pending = Some((500.0, 400.0));
-        let event = rdev::Event {
-            event_type: rdev::EventType::MouseMove { x: 540.0, y: 400.0 },
-            time: std::time::SystemTime::now(),
-            name: None,
-        };
-
-        assert!(!consume_pending_recenter_event(&event, &mut pending));
-        assert_eq!(pending, Some((500.0, 400.0)));
     }
 }

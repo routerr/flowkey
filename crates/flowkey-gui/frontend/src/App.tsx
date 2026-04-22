@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { invoke, event } from '@tauri-apps/api'
 import { enable, disable, isEnabled } from 'tauri-plugin-autostart-api'
 import {
@@ -17,7 +17,10 @@ function App() {
   const [discoveredPeers, setDiscoveredPeers] = useState<DiscoveredPeer[]>([])
   const [pairingSas, setPairingSas] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [disconnectNotif, setDisconnectNotif] = useState<string | null>(null)
   const [isPairing, setIsPairing] = useState(false)
+  const prevStateRef = useRef<string | null>(null)
+  const userReleasedRef = useRef(false)
 
   // Load config on mount
   useEffect(() => {
@@ -29,6 +32,13 @@ function App() {
   // Listen for daemon status events
   useEffect(() => {
     const unlisten = event.listen<DaemonStatus>('daemon-status', (e) => {
+      const next = e.payload.state
+      const prev = prevStateRef.current
+      if (prev === 'controlling' && next !== 'controlling' && !userReleasedRef.current) {
+        setDisconnectNotif('Control session ended — the remote peer disconnected.')
+      }
+      userReleasedRef.current = false
+      prevStateRef.current = next
       setStatus(e.payload)
     })
     return () => {
@@ -152,9 +162,11 @@ function App() {
   }
 
   async function releaseControl() {
+    userReleasedRef.current = true
     try {
       await invoke('release_control')
     } catch (e) {
+      userReleasedRef.current = false
       setError(String(e))
     }
   }
@@ -211,6 +223,12 @@ function App() {
       </header>
 
       {error && <div className="error-bar">{error}</div>}
+      {disconnectNotif && (
+        <div className="error-bar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{disconnectNotif}</span>
+          <button onClick={() => setDisconnectNotif(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>×</button>
+        </div>
+      )}
       {missingPermissions && (
         <section className="permission-banner">
           <div>
