@@ -68,14 +68,13 @@ pub(crate) async fn run_daemon_with_shutdown(
         .await
         .with_context(|| format!("failed to bind {}", config.node.listen_addr))?;
     let runtime: Arc<Mutex<DaemonRuntime>> = Arc::new(Mutex::new(DaemonRuntime::new()));
-    let status_snapshot = Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(
-        &runtime
-            .lock()
-            .map_err(|e| {
-                error!("daemon runtime mutex poisoned: {}", e);
-                anyhow!("daemon state unavailable")
-            })?,
-    )));
+    let status_snapshot = {
+        let guard = runtime.lock().map_err(|e| {
+            error!("daemon runtime mutex poisoned: {}", e);
+            anyhow!("daemon state unavailable")
+        })?;
+        Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(&*guard)))
+    };
     let suppression_state = Arc::new(AtomicBool::new(false));
     let session_senders: Arc<Mutex<HashMap<String, SessionSender>>> =
         Arc::new(Mutex::new(HashMap::new()));

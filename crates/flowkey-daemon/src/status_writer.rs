@@ -1,7 +1,6 @@
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use anyhow::anyhow;
 use arc_swap::ArcSwap;
 use flowkey_config::Config;
 use flowkey_core::daemon::DaemonRuntime;
