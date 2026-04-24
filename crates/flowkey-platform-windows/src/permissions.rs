@@ -28,6 +28,7 @@ impl PermissionStatus {
             ]
         } else {
             vec![
+                "hotkey disabled: daemon is not in an interactive desktop session".to_string(),
                 "Windows requires an interactive user session for input capture and injection".to_string(),
                 "Do not launch `flky daemon` from SSH or `Start-Process`; start it from the signed-in desktop session instead".to_string(),
                 "Open TCP port 48571 in Windows Firewall on the controlling machine if peers cannot connect".to_string(),

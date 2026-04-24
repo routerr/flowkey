@@ -598,7 +598,7 @@ fn spawn_grab_thread(
     let mouse_loopback = loopback.clone();
     let mouse_suppression = Arc::clone(&suppression_enabled);
     let mouse_sender = sender.clone();
-    let mouse_thread = thread::spawn(move || {
+    let _mouse_thread = thread::spawn(move || {
         let ms_hook: HHOOK = unsafe {
             SetWindowsHookExW(WH_MOUSE_LL, Some(native_mouse_proc), null_mut(), 0)
         };
@@ -710,5 +710,26 @@ fn recenter_cursor_to_virtual_center() -> Option<(f64, f64)> {
         None
     } else {
         Some((f64::from(center_x), f64::from(center_y)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rdev_key_from_vk;
+    use rdev::Key;
+
+    #[test]
+    fn rdev_key_from_vk_maps_generic_modifiers() {
+        assert_eq!(rdev_key_from_vk(16), Key::ShiftLeft);
+        assert_eq!(rdev_key_from_vk(17), Key::ControlLeft);
+        assert_eq!(rdev_key_from_vk(18), Key::Alt);
+    }
+
+    #[test]
+    fn rdev_key_from_vk_maps_sided_modifiers() {
+        assert_eq!(rdev_key_from_vk(160), Key::ShiftLeft);
+        assert_eq!(rdev_key_from_vk(161), Key::ShiftRight);
+        assert_eq!(rdev_key_from_vk(162), Key::ControlLeft);
+        assert_eq!(rdev_key_from_vk(163), Key::ControlRight);
     }
 }
