@@ -14,7 +14,7 @@ use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::channel;
 use tokio::time::{interval, Duration};
-use tracing::{info, trace, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::frame::{read_message, write_message};
 use crate::heartbeat::HeartbeatConfig;
@@ -70,7 +70,7 @@ impl Drop for SessionSender {
 }
 
 impl SessionSender {
-    pub fn send_input(&self, event: InputEvent) -> Result<(), String> {
+    pub fn send_input(&self, event: InputEvent) -> anyhow::Result<()> {
         match event {
             InputEvent::MouseMove { .. } => {
                 self.inner.queue_mouse_move(event)?;
@@ -84,18 +84,22 @@ impl SessionSender {
         }
     }
 
-    pub fn send_switch(&self, request_id: String) -> Result<(), String> {
+    pub fn send_switch(&self, request_id: String) -> anyhow::Result<()> {
         self.inner
             .send_control_command(SessionCommand::SwitchControl { request_id })
     }
 
-    pub fn send_release(&self, request_id: String) -> Result<(), String> {
+    pub fn send_release(&self, request_id: String) -> anyhow::Result<()> {
         self.inner
             .send_control_command(SessionCommand::ReleaseControl { request_id })
     }
 
-    pub fn send_release_all(&self) -> Result<(), String> {
+    pub fn send_release_all(&self) -> anyhow::Result<()> {
         self.inner.send_control_command(SessionCommand::ReleaseAll)
+    }
+
+    pub fn dropped_inputs(&self) -> usize {
+        self.inner.dropped_inputs.load(Ordering::SeqCst)
     }
 }
 
@@ -154,7 +158,7 @@ impl SessionSenderInner {
         inner
     }
 
-    fn queue_mouse_move(&self, event: InputEvent) -> Result<(), String> {
+    fn queue_mouse_move(&self, event: InputEvent) -> anyhow::Result<()> {
         self.ensure_channel_open()?;
         let InputEvent::MouseMove {
             dx,
@@ -166,10 +170,14 @@ impl SessionSenderInner {
             return Ok(());
         };
 
-        let mut state = self
-            .coalescer
-            .lock()
-            .expect("input coalescer mutex should not be poisoned");
+        let mut state = match self.coalescer.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                error!("input coalescer mutex poisoned: {}", e);
+                self.mark_channel_closed();
+                return anyhow::bail!("coalescer unavailable");
+            }
+        };
         if let Err(error) = Self::flush_scroll_locked(&self.sender, &mut state) {
             self.mark_channel_closed();
             return Err(error);
@@ -212,7 +220,7 @@ impl SessionSenderInner {
         Ok(())
     }
 
-    fn queue_scroll(&self, event: InputEvent) -> Result<(), String> {
+    fn queue_scroll(&self, event: InputEvent) -> anyhow::Result<()> {
         self.ensure_channel_open()?;
         let InputEvent::MouseWheel {
             delta_x,
@@ -224,10 +232,14 @@ impl SessionSenderInner {
             return Ok(());
         };
 
-        let mut state = self
-            .coalescer
-            .lock()
-            .expect("input coalescer mutex should not be poisoned");
+        let mut state = match self.coalescer.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                error!("input coalescer mutex poisoned: {}", e);
+                self.mark_channel_closed();
+                return anyhow::bail!("coalescer unavailable");
+            }
+        };
         if let Err(error) = Self::flush_move_locked(&self.sender, &mut state) {
             self.mark_channel_closed();
             return Err(error);
@@ -267,12 +279,16 @@ impl SessionSenderInner {
         Ok(())
     }
 
-    fn send_immediate_input(&self, event: InputEvent) -> Result<(), String> {
+    fn send_immediate_input(&self, event: InputEvent) -> anyhow::Result<()> {
         self.ensure_channel_open()?;
-        let mut state = self
-            .coalescer
-            .lock()
-            .expect("input coalescer mutex should not be poisoned");
+        let mut state = match self.coalescer.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                error!("input coalescer mutex poisoned: {}", e);
+                self.mark_channel_closed();
+                return anyhow::bail!("coalescer unavailable");
+            }
+        };
         if let Err(error) = Self::flush_move_locked(&self.sender, &mut state) {
             self.mark_channel_closed();
             return Err(error);
@@ -290,30 +306,32 @@ impl SessionSenderInner {
             }
             Err(TrySendError::Disconnected(_)) => {
                 self.mark_channel_closed();
-                Err("session command channel closed".to_string())
+                anyhow::bail!("session command channel closed")
             }
         }
     }
 
-    fn send_control_command(&self, command: SessionCommand) -> Result<(), String> {
+    fn send_control_command(&self, command: SessionCommand) -> anyhow::Result<()> {
         self.ensure_channel_open()?;
-        let mut state = self
-            .coalescer
-            .lock()
-            .expect("input coalescer mutex should not be poisoned");
+        let mut state = match self.coalescer.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                error!("input coalescer mutex poisoned: {}", e);
+                self.mark_channel_closed();
+                return anyhow::bail!("coalescer unavailable");
+            }
+        };
         state.pending_move = None;
         state.pending_scroll = None;
-        self.sender
-            .send(command)
-            .map_err(|_| {
-                self.mark_channel_closed();
-                "session command channel closed".to_string()
-            })
+        self.sender.send(command).map_err(|_| {
+            self.mark_channel_closed();
+            anyhow::anyhow!("session command channel closed")
+        })
     }
 
-    fn ensure_channel_open(&self) -> Result<(), String> {
+    fn ensure_channel_open(&self) -> anyhow::Result<()> {
         if self.channel_closed.load(Ordering::SeqCst) {
-            Err("session command channel closed".to_string())
+            anyhow::bail!("session command channel closed")
         } else {
             Ok(())
         }
@@ -327,7 +345,7 @@ impl SessionSenderInner {
     fn flush_move_locked(
         sender: &Sender<SessionCommand>,
         state: &mut InputCoalescer,
-    ) -> Result<(), String> {
+    ) -> anyhow::Result<()> {
         let Some(pending) = state.pending_move.take() else {
             return Ok(());
         };
@@ -341,7 +359,7 @@ impl SessionSenderInner {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Ok(()), // drop stale coalesced move; cursor catches up
             Err(TrySendError::Disconnected(_)) => {
-                Err("session command channel closed".to_string())
+                anyhow::bail!("session command channel closed")
             }
         }
     }
@@ -349,7 +367,7 @@ impl SessionSenderInner {
     fn flush_scroll_locked(
         sender: &Sender<SessionCommand>,
         state: &mut InputCoalescer,
-    ) -> Result<(), String> {
+    ) -> anyhow::Result<()> {
         let Some(pending) = state.pending_scroll.take() else {
             return Ok(());
         };
@@ -363,7 +381,7 @@ impl SessionSenderInner {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Ok(()), // drop stale coalesced scroll; user can re-scroll
             Err(TrySendError::Disconnected(_)) => {
-                Err("session command channel closed".to_string())
+                anyhow::bail!("session command channel closed")
             }
         }
     }
@@ -375,10 +393,13 @@ impl SessionSenderInner {
                 break;
             };
 
-            let mut state = inner
-                .coalescer
-                .lock()
-                .expect("input coalescer mutex should not be poisoned");
+            let mut state = match inner.coalescer.lock() {
+                Ok(state) => state,
+                Err(e) => {
+                    error!("input coalescer mutex poisoned: {}", e);
+                    break 'worker;
+                }
+            };
 
             while state.pending_move.is_none() && state.pending_scroll.is_none() {
                 if inner.shutdown.load(Ordering::SeqCst)
@@ -386,10 +407,13 @@ impl SessionSenderInner {
                 {
                     break 'worker;
                 }
-                state = inner
-                    .coalescer_wake
-                    .wait(state)
-                    .expect("input coalescer mutex should not be poisoned");
+                state = match inner.coalescer_wake.wait(state) {
+                    Ok(state) => state,
+                    Err(e) => {
+                        error!("input coalescer mutex poisoned after wait: {}", e);
+                        break 'worker;
+                    }
+                };
             }
 
             let deadline = earliest_deadline(&state);
@@ -400,10 +424,13 @@ impl SessionSenderInner {
             let now = Instant::now();
             if now < deadline {
                 let wait = deadline.saturating_duration_since(now);
-                let (next_state, _) = inner
-                    .coalescer_wake
-                    .wait_timeout(state, wait)
-                    .expect("input coalescer mutex should not be poisoned");
+                let (next_state, _) = match inner.coalescer_wake.wait_timeout(state, wait) {
+                    Ok((state, status)) => (state, status),
+                    Err(e) => {
+                        error!("input coalescer mutex poisoned after wait_timeout: {}", e);
+                        break 'worker;
+                    }
+                };
                 state = next_state;
 
                 if inner.shutdown.load(Ordering::SeqCst) {
@@ -960,11 +987,11 @@ mod tests {
     struct NoopSink;
 
     impl flowkey_input::InputEventSink for NoopSink {
-        fn handle(&mut self, _event: &flowkey_input::event::InputEvent) -> Result<(), String> {
+        fn handle(&mut self, _event: &flowkey_input::event::InputEvent) -> anyhow::Result<()> {
             Ok(())
         }
 
-        fn release_all(&mut self) -> Result<(), String> {
+        fn release_all(&mut self) -> anyhow::Result<()> {
             Ok(())
         }
     }

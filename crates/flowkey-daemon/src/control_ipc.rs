@@ -206,37 +206,41 @@ fn handle_control_command(
     match command {
         DaemonCommand::Switch { peer_id } => {
             let (state, peer, previous_peer) = {
-                let mut runtime = runtime
-                    .lock()
-                    .expect("daemon runtime mutex should not be poisoned");
+                match runtime.lock() {
+                    Ok(mut runtime) => {
+                        let releasing_existing_session = matches!(
+                            runtime.state,
+                            DaemonState::Controlling { .. } | DaemonState::ControlledBy { .. }
+                        );
+                        let previous_peer = if releasing_existing_session {
+                            runtime.active_peer_id.clone()
+                        } else {
+                            None
+                        };
+                        if releasing_existing_session {
+                            runtime.release_control()?;
+                        }
 
-                let releasing_existing_session = matches!(
-                    runtime.state,
-                    DaemonState::Controlling { .. } | DaemonState::ControlledBy { .. }
-                );
-                let previous_peer = if releasing_existing_session {
-                    runtime.active_peer_id.clone()
-                } else {
-                    None
-                };
-                if releasing_existing_session {
-                    runtime.release_control()?;
+                        runtime.select_active_peer(peer_id.clone())?;
+                        if !matches!(runtime.state, DaemonState::Controlling { .. }) {
+                            runtime.toggle_controller()?;
+                        }
+
+                        if matches!(runtime.state, DaemonState::Controlling { .. }) {
+                            suppression_state.store(true, Ordering::SeqCst);
+                        }
+
+                        (
+                            runtime.state.clone(),
+                            runtime.active_peer_id.clone(),
+                            previous_peer,
+                        )
+                    }
+                    Err(e) => {
+                        error!("daemon runtime mutex poisoned: {}", e);
+                        return Err("daemon state unavailable".to_string());
+                    }
                 }
-
-                runtime.select_active_peer(peer_id.clone())?;
-                if !matches!(runtime.state, DaemonState::Controlling { .. }) {
-                    runtime.toggle_controller()?;
-                }
-
-                if matches!(runtime.state, DaemonState::Controlling { .. }) {
-                    suppression_state.store(true, Ordering::SeqCst);
-                }
-
-                (
-                    runtime.state.clone(),
-                    runtime.active_peer_id.clone(),
-                    previous_peer,
-                )
             };
             refresh_and_persist_status_snapshot(runtime, status_snapshot, status_path);
             if let Some(previous_peer) = previous_peer.as_deref() {
@@ -256,27 +260,37 @@ fn handle_control_command(
         }
         DaemonCommand::Release => {
             let active_peer = {
-                let runtime = runtime
-                    .lock()
-                    .expect("daemon runtime mutex should not be poisoned");
-                runtime.active_peer_id.clone()
+                match runtime.lock() {
+                    Ok(runtime) => runtime.active_peer_id.clone(),
+                    Err(e) => {
+                        error!("daemon runtime mutex poisoned: {}", e);
+                        return Err("daemon state unavailable".to_string());
+                    }
+                }
             };
             if let Some(peer_id) = &active_peer {
                 notify_peer_release(peer_id, session_senders);
             }
             {
-                let mut runtime = runtime
-                    .lock()
-                    .expect("daemon runtime mutex should not be poisoned");
-                runtime.release_control()?;
+                match runtime.lock() {
+                    Ok(mut runtime) => {
+                        runtime.release_control()?;
+                    }
+                    Err(e) => {
+                        error!("daemon runtime mutex poisoned: {}", e);
+                        return Err("daemon state unavailable".to_string());
+                    }
+                }
             }
             suppression_state.store(false, Ordering::SeqCst);
             refresh_and_persist_status_snapshot(runtime, status_snapshot, status_path);
-            let state = runtime
-                .lock()
-                .expect("daemon runtime mutex should not be poisoned")
-                .state
-                .clone();
+            let state = match runtime.lock() {
+                Ok(runtime) => runtime.state.clone(),
+                Err(e) => {
+                    error!("daemon runtime mutex poisoned: {}", e);
+                    return Err("daemon state unavailable".to_string());
+                }
+            };
             info!(
                 request = "release",
                 state = ?state,
@@ -295,11 +309,17 @@ pub(crate) fn notify_peer_switch(
     let request_id = generate_request_id();
     let request_label = request_id.clone();
     let (sender, sender_count, connected_peers) = {
-        let senders = session_senders
-            .lock()
-            .expect("session sender registry should not be poisoned");
-        let peers = senders.keys().cloned().collect::<Vec<_>>();
-        (senders.get(peer_id).cloned(), senders.len(), peers)
+        match session_senders.lock() {
+            Ok(senders) => {
+                let peers = senders.keys().cloned().collect::<Vec<_>>();
+                (senders.get(peer_id).cloned(), senders.len(), peers)
+            }
+            Err(e) => {
+                error!("session sender registry mutex poisoned: {}", e);
+                warn!(peer = %peer_id, request = %request_id, "failed to queue switch due to mutex poisoning");
+                return;
+            }
+        }
     };
     if let Some(sender) = sender {
         info!(
@@ -332,11 +352,17 @@ pub(crate) fn notify_peer_release(
     let request_id = generate_request_id();
     let request_label = request_id.clone();
     let (sender, sender_count, connected_peers) = {
-        let senders = session_senders
-            .lock()
-            .expect("session sender registry should not be poisoned");
-        let peers = senders.keys().cloned().collect::<Vec<_>>();
-        (senders.get(peer_id).cloned(), senders.len(), peers)
+        match session_senders.lock() {
+            Ok(senders) => {
+                let peers = senders.keys().cloned().collect::<Vec<_>>();
+                (senders.get(peer_id).cloned(), senders.len(), peers)
+            }
+            Err(e) => {
+                error!("session sender registry mutex poisoned: {}", e);
+                warn!(peer = %peer_id, request = %request_id, "failed to queue release due to mutex poisoning");
+                return;
+            }
+        }
     };
     if let Some(sender) = sender {
         info!(
@@ -419,8 +445,8 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(old_peer);
-            runtime.mark_authenticated(new_peer);
+            runtime.mark_authenticated(old_peer).expect("should authenticate");
+            runtime.mark_authenticated(new_peer).expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
         {
@@ -477,7 +503,7 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id);
+            runtime.mark_authenticated(peer_id).expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
         session_senders
@@ -536,7 +562,7 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(controller_peer);
+            runtime.mark_authenticated(controller_peer).expect("should authenticate");
             runtime
                 .mark_controlled_by(controller_peer)
                 .expect("should enter controlled-by");
@@ -617,7 +643,7 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id);
+            runtime.mark_authenticated(peer_id).expect("should authenticate");
         }
         session_senders
             .lock()

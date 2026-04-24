@@ -12,7 +12,7 @@ use flowkey_input::hotkey::HotkeyBinding;
 use flowkey_input::loopback::SharedLoopbackSuppressor;
 use flowkey_input::InputEventSink;
 use flowkey_net::connection::SessionSender;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::control_ipc::{notify_peer_release, notify_peer_switch};
 use crate::status_writer::refresh_and_persist_status_snapshot;
@@ -51,24 +51,34 @@ pub(crate) fn spawn_hotkey_watcher(
     {
         if let Some(note) = capture_note {
             {
-                let mut runtime = runtime
-                    .lock()
-                    .expect("daemon runtime mutex should not be poisoned");
-                push_runtime_note(&mut runtime, note);
+                match runtime.lock() {
+                    Ok(mut runtime) => {
+                        push_runtime_note(&mut runtime, note);
+                    }
+                    Err(e) => {
+                        error!("daemon runtime mutex poisoned: {}", e);
+                        warn!("failed to add capture startup note due to mutex poisoning");
+                    }
+                }
             }
             refresh_and_persist_status_snapshot(&runtime, &status_snapshot, &status_path);
         }
 
         if let Err(error) = capture.start() {
             {
-                let mut runtime = runtime
-                    .lock()
-                    .expect("daemon runtime mutex should not be poisoned");
-                runtime.diagnostics.local_capture_enabled = false;
-                push_runtime_note(
-                    &mut runtime,
-                    format!("local hotkey listener disabled: {error}"),
-                );
+                match runtime.lock() {
+                    Ok(mut runtime) => {
+                        runtime.diagnostics.local_capture_enabled = false;
+                        push_runtime_note(
+                            &mut runtime,
+                            format!("local hotkey listener disabled: {error}"),
+                        );
+                    }
+                    Err(e) => {
+                        error!("daemon runtime mutex poisoned: {}", e);
+                        warn!("failed to disable capture due to mutex poisoning");
+                    }
+                }
             }
             refresh_and_persist_status_snapshot(&runtime, &status_snapshot, &status_path);
             warn!(%error, "failed to start local hotkey listener");
@@ -76,11 +86,16 @@ pub(crate) fn spawn_hotkey_watcher(
         }
 
         {
-            let mut runtime = runtime
-                .lock()
-                .expect("daemon runtime mutex should not be poisoned");
-            runtime.diagnostics.local_capture_enabled = true;
-            runtime.diagnostics.capture_restarts = 0;
+            match runtime.lock() {
+                Ok(mut runtime) => {
+                    runtime.diagnostics.local_capture_enabled = true;
+                    runtime.diagnostics.capture_restarts = 0;
+                }
+                Err(e) => {
+                    error!("daemon runtime mutex poisoned: {}", e);
+                    warn!("failed to enable capture due to mutex poisoning");
+                }
+            }
         }
         refresh_and_persist_status_snapshot(&runtime, &status_snapshot, &status_path);
 
@@ -94,10 +109,16 @@ pub(crate) fn spawn_hotkey_watcher(
                     let current = capture_restart_counter.load(Ordering::SeqCst);
                     if current != last_seen {
                         {
-                            let mut runtime = runtime
-                                .lock()
-                                .expect("daemon runtime mutex should not be poisoned");
-                            runtime.diagnostics.capture_restarts = current;
+                            match runtime.lock() {
+                                Ok(mut runtime) => {
+                                    runtime.diagnostics.capture_restarts = current;
+                                }
+                                Err(e) => {
+                                    error!("daemon runtime mutex poisoned: {}", e);
+                                    warn!("failed to update capture restart counter due to mutex poisoning");
+                                    break;
+                                }
+                            }
                         }
                         refresh_and_persist_status_snapshot(
                             &runtime,
@@ -115,26 +136,32 @@ pub(crate) fn spawn_hotkey_watcher(
             match capture.wait() {
                 Some(CaptureSignal::HotkeyPressed) => {
                     let result = {
-                        let mut runtime = runtime
-                            .lock()
-                            .expect("daemon runtime mutex should not be poisoned");
-                        match runtime.toggle_controller() {
-                            Ok(()) => {
-                                let state = runtime.state.clone();
-                                let peer = runtime.active_peer_id.clone();
+                        match runtime.lock() {
+                            Ok(mut runtime) => {
+                                match runtime.toggle_controller() {
+                                    Ok(()) => {
+                                        let state = runtime.state.clone();
+                                        let peer = runtime.active_peer_id.clone();
 
-                                match &state {
-                                    DaemonState::Controlling { .. } => {
-                                        capture.set_suppression_enabled(true);
+                                        match &state {
+                                            DaemonState::Controlling { .. } => {
+                                                capture.set_suppression_enabled(true);
+                                            }
+                                            _ => {
+                                                capture.set_suppression_enabled(false);
+                                            }
+                                        }
+
+                                        Ok((state, peer))
                                     }
-                                    _ => {
-                                        capture.set_suppression_enabled(false);
-                                    }
+                                    Err(error) => Err(error),
                                 }
-
-                                Ok((state, peer))
                             }
-                            Err(error) => Err(error),
+                            Err(e) => {
+                                error!("daemon runtime mutex poisoned: {}", e);
+                                warn!("hotkey switch ignored due to mutex poisoning");
+                                Err("daemon state unavailable".to_string())
+                            }
                         }
                     };
 
@@ -165,18 +192,25 @@ pub(crate) fn spawn_hotkey_watcher(
                 }
                 Some(CaptureSignal::Input(event)) => {
                     let active_peer_id = {
-                        let runtime = runtime
-                            .lock()
-                            .expect("daemon runtime mutex should not be poisoned");
-                        if matches!(
-                            runtime.state,
-                            flowkey_core::daemon::DaemonState::Controlling { .. }
-                        ) {
-                            runtime.active_peer_id.clone()
-                        } else {
-                            warn!(event = ?event, state = ?runtime.state, "dropping captured input: not in Controlling state");
-                            None
+                        match runtime.lock() {
+                            Ok(runtime) => {
+                                if matches!(
+                                    runtime.state,
+                                    flowkey_core::daemon::DaemonState::Controlling { .. }
+                                ) {
+                                    runtime.active_peer_id.clone()
+                                } else {
+                                    warn!(event = ?event, state = ?runtime.state, "dropping captured input: not in Controlling state");
+                                    None
+                                }
+                            }
+                            Err(e) => {
+                                error!("daemon runtime mutex poisoned: {}", e);
+                                warn!("dropping captured input due to mutex poisoning");
+                                None
+                            }
                         }
+                    };
                     };
 
                     if let Some(peer_id) = active_peer_id {

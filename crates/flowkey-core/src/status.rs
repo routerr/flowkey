@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn from_runtime_marks_connected_state_and_peer() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc");
+        runtime.mark_authenticated("office-pc").expect("should authenticate");
         runtime.diagnostics.local_capture_enabled = true;
         runtime.diagnostics.input_injection_backend = "native".to_string();
 
@@ -172,10 +172,10 @@ mod tests {
     #[test]
     fn from_runtime_marks_recovery_as_unhealthy() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc");
-        runtime.mark_authenticated("spare-pc");
+        runtime.mark_authenticated("office-pc").expect("should authenticate");
+        runtime.mark_authenticated("spare-pc").expect("should authenticate");
         runtime.toggle_controller().expect("should enter control");
-        runtime.mark_disconnected("office-pc");
+        runtime.mark_disconnected("office-pc").expect("should disconnect");
 
         let status = DaemonStatus::from_runtime(&runtime);
 

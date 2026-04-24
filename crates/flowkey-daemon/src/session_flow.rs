@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use anyhow::{anyhow, Result};
 use arc_swap::ArcSwap;
 use flowkey_config::Config;
 use flowkey_core::daemon::{DaemonRuntime, DaemonState, Role};
@@ -17,7 +18,7 @@ use flowkey_net::connection::{
     SessionSender,
 };
 use flowkey_net::heartbeat::HeartbeatConfig;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::platform::{create_platform_input_sink, push_runtime_note};
 use crate::status_writer::refresh_and_persist_status_snapshot;
@@ -28,6 +29,95 @@ pub(crate) struct DaemonSessionCallback {
     pub(crate) status_path: PathBuf,
     pub(crate) suppression_state: Arc<AtomicBool>,
     pub(crate) accept_remote_control: bool,
+}
+
+impl DaemonSessionCallback {
+    /// Applies a state transition and captures both state before and after for logging.
+    /// Returns (transition result, state before, state after).
+    fn apply_transition_with_state_snapshot<F>(
+        &self,
+        f: F,
+    ) -> (Result<(), String>, DaemonState, DaemonState)
+    where
+        F: FnOnce(&mut DaemonRuntime) -> Result<(), String>,
+    {
+        let (result, state_before, state_after) = {
+            match self.runtime.lock() {
+                Ok(mut runtime) => {
+                    let state_before = runtime.state.clone();
+                    let result = f(&mut runtime);
+                    let state_after = runtime.state.clone();
+                    (result, state_before, state_after)
+                }
+                Err(e) => {
+                    error!("daemon runtime mutex poisoned: {}", e);
+                    (
+                        Err("daemon state unavailable".to_string()),
+                        DaemonState::Disconnected,
+                        DaemonState::Disconnected,
+                    )
+                }
+            }
+        };
+        (result, state_before, state_after)
+    }
+
+    /// Reads the current daemon state without mutation.
+    fn read_state(&self) -> DaemonState {
+        match self.runtime.lock() {
+            Ok(runtime) => runtime.state.clone(),
+            Err(e) => {
+                error!("daemon runtime mutex poisoned: {}", e);
+                DaemonState::Disconnected
+            }
+        }
+    }
+
+    /// Generic handler for state transitions with logging.
+    /// Applies the transition, updates suppression state, persists status snapshot, and logs the result.
+    fn apply_state_transition_and_log<F>(
+        &self,
+        peer_id: &str,
+        request_id: &str,
+        operation_name: &str,
+        f: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(&mut DaemonRuntime) -> Result<(), String>,
+    {
+        let (result, state_before, state_after) = self.apply_transition_with_state_snapshot(f);
+
+        match result {
+            Ok(()) => {
+                self.suppression_state.store(false, Ordering::SeqCst);
+                refresh_and_persist_status_snapshot(
+                    &self.runtime,
+                    &self.status_snapshot,
+                    &self.status_path,
+                );
+                info!(
+                    peer = %peer_id,
+                    request = %request_id,
+                    state_before = ?state_before,
+                    state_after = ?state_after,
+                    operation = %operation_name,
+                    "state transition succeeded"
+                );
+                Ok(())
+            }
+            Err(error) => {
+                warn!(
+                    peer = %peer_id,
+                    request = %request_id,
+                    state_before = ?state_before,
+                    %error,
+                    operation = %operation_name,
+                    "state transition failed"
+                );
+                Err(error)
+            }
+        }
+    }
 }
 
 impl flowkey_net::connection::SessionStateCallback for DaemonSessionCallback {
@@ -41,89 +131,21 @@ impl flowkey_net::connection::SessionStateCallback for DaemonSessionCallback {
             return;
         }
 
-        let (result, state_before) = {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .expect("daemon runtime mutex should not be poisoned");
-            let state_before = runtime.state.clone();
-            (runtime.mark_controlled_by(peer_id), state_before)
-        };
-        match result {
-            Ok(()) => {
-                self.suppression_state.store(false, Ordering::SeqCst);
-                refresh_and_persist_status_snapshot(
-                    &self.runtime,
-                    &self.status_snapshot,
-                    &self.status_path,
-                );
-                let state_after = self
-                    .runtime
-                    .lock()
-                    .expect("daemon runtime mutex should not be poisoned")
-                    .state
-                    .clone();
-                info!(
-                    peer = %peer_id,
-                    request = %request_id,
-                    state_before = ?state_before,
-                    state_after = ?state_after,
-                    "transitioned to controlled-by via remote switch"
-                );
-            }
-            Err(error) => {
-                warn!(
-                    peer = %peer_id,
-                    request = %request_id,
-                    state_before = ?state_before,
-                    %error,
-                    "failed to apply remote switch"
-                );
-            }
-        }
+        let _ = self.apply_state_transition_and_log(
+            peer_id,
+            request_id,
+            "remote-switch",
+            |runtime| runtime.mark_controlled_by(peer_id),
+        );
     }
 
     fn on_remote_release(&self, peer_id: &str, request_id: &str) {
-        let (result, state_before) = {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .expect("daemon runtime mutex should not be poisoned");
-            let state_before = runtime.state.clone();
-            (runtime.release_control(), state_before)
-        };
-        match result {
-            Ok(()) => {
-                self.suppression_state.store(false, Ordering::SeqCst);
-                refresh_and_persist_status_snapshot(
-                    &self.runtime,
-                    &self.status_snapshot,
-                    &self.status_path,
-                );
-                let state_after = self
-                    .runtime
-                    .lock()
-                    .expect("daemon runtime mutex should not be poisoned")
-                    .state
-                    .clone();
-                info!(
-                    peer = %peer_id,
-                    request = %request_id,
-                    state_before = ?state_before,
-                    state_after = ?state_after,
-                    "transitioned to connected-idle via remote release"
-                );
-            }
-            Err(error) => {
-                warn!(
-                    peer = %peer_id,
-                    request = %request_id,
-                    state_before = ?state_before,
-                    %error,
-                    "failed to apply remote release"
-                );
-            }
-        }
+        let _ = self.apply_state_transition_and_log(
+            peer_id,
+            request_id,
+            "remote-release",
+            |runtime| runtime.release_control(),
+        );
     }
 }
 
@@ -143,10 +165,20 @@ pub(crate) async fn setup_and_run_session(
     suppression_state: &Arc<AtomicBool>,
 ) -> Duration {
     let peer_id = connection.info.peer_id.clone();
-    let resumed_role = runtime
-        .lock()
-        .expect("daemon runtime mutex should not be poisoned")
-        .mark_authenticated(peer_id.clone());
+    let resumed_role = match runtime.lock() {
+        Ok(mut runtime) => match runtime.mark_authenticated(peer_id.clone()) {
+            Ok(role) => role,
+            Err(e) => {
+                warn!(peer = %peer_id, error = %e, "failed to mark authenticated");
+                None
+            }
+        },
+        Err(e) => {
+            error!("daemon runtime mutex poisoned: {}", e);
+            warn!(peer = %peer_id, "failed to mark authenticated due to mutex poisoning");
+            None
+        }
+    };
 
     let (sender, receiver) =
         session_channel_with_coalesce_window(config.switch.input_coalesce_window_ms);
@@ -157,9 +189,14 @@ pub(crate) async fn setup_and_run_session(
         if let Err(error) = sender.send_switch(request_id) {
             warn!(peer = %peer_id, %error, "failed to send resume switch request");
         } else {
-            let mut runtime_guard = runtime
-                .lock()
-                .expect("daemon runtime mutex should not be poisoned");
+            let mut runtime_guard = match runtime.lock() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    error!("daemon runtime mutex poisoned: {}", e);
+                    warn!(peer = %peer_id, "failed to toggle controller due to mutex poisoning");
+                    return;
+                }
+            };
             if !matches!(runtime_guard.state, DaemonState::Controlling { .. }) {
                 let _ = runtime_guard.toggle_controller();
             }
@@ -168,9 +205,14 @@ pub(crate) async fn setup_and_run_session(
     }
 
     let sender_count = {
-        let mut senders = session_senders
-            .lock()
-            .expect("session sender registry should not be poisoned");
+        let mut senders = match session_senders.lock() {
+            Ok(senders) => senders,
+            Err(e) => {
+                error!("session sender registry mutex poisoned: {}", e);
+                warn!(peer = %peer_id, "failed to register sender due to mutex poisoning");
+                return Duration::from_secs(0);
+            }
+        };
         senders.insert(peer_id.clone(), sender);
         senders.len()
     };
@@ -191,9 +233,14 @@ pub(crate) async fn setup_and_run_session(
 
     let (mut sink, backend, note) = create_platform_input_sink(Arc::clone(loopback));
     {
-        let mut runtime_guard = runtime
-            .lock()
-            .expect("daemon runtime mutex should not be poisoned");
+        let mut runtime_guard = match runtime.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                error!("daemon runtime mutex poisoned: {}", e);
+                warn!(peer = %peer_id, "failed to update diagnostics due to mutex poisoning");
+                return Duration::from_secs(0);
+            }
+        };
         runtime_guard.diagnostics.input_injection_backend = backend.to_string();
         if let Some(note) = note {
             push_runtime_note(&mut runtime_guard, note);
@@ -252,10 +299,26 @@ pub(crate) fn cleanup_session(
     sink: &mut dyn InputEventSink,
 ) {
     let sender_count = {
-        let mut senders = session_senders
-            .lock()
-            .expect("session sender registry should not be poisoned");
+        let mut senders = match session_senders.lock() {
+            Ok(senders) => senders,
+            Err(e) => {
+                error!("session sender registry mutex poisoned: {}", e);
+                warn!(peer = %peer_id, "failed to remove sender due to mutex poisoning");
+                return;
+            }
+        };
+        let dropped_inputs = senders
+            .get(peer_id)
+            .map(|sender| sender.dropped_inputs())
+            .unwrap_or(0);
         senders.remove(peer_id);
+        if dropped_inputs > 0 {
+            warn!(
+                peer = %peer_id,
+                dropped_inputs,
+                "session closed with dropped input events"
+            );
+        }
         senders.len()
     };
 
@@ -273,10 +336,17 @@ pub(crate) fn cleanup_session(
         warn!(peer = %peer_id, %error, "failed to release input state");
     }
 
-    runtime
-        .lock()
-        .expect("daemon runtime mutex should not be poisoned")
-        .mark_disconnected(peer_id);
+    match runtime.lock() {
+        Ok(mut runtime) => {
+            if let Err(e) = runtime.mark_disconnected(peer_id) {
+                warn!(peer = %peer_id, error = %e, "failed to mark disconnected");
+            }
+        }
+        Err(e) => {
+            error!("daemon runtime mutex poisoned: {}", e);
+            warn!(peer = %peer_id, "failed to mark disconnected due to mutex poisoning");
+        }
+    }
     suppression_state.store(false, Ordering::SeqCst);
     refresh_and_persist_status_snapshot(runtime, status_snapshot, status_path);
     info!(peer = %peer_id, sender_count, "cleaned up session sender after disconnect");
@@ -291,17 +361,29 @@ pub(crate) fn mark_lost_session(
     suppression_state: &Arc<AtomicBool>,
 ) {
     let sender_count = {
-        let mut senders = session_senders
-            .lock()
-            .expect("session sender registry should not be poisoned");
+        let mut senders = match session_senders.lock() {
+            Ok(senders) => senders,
+            Err(e) => {
+                error!("session sender registry mutex poisoned: {}", e);
+                warn!(peer = %peer_id, "failed to remove sender due to mutex poisoning");
+                return;
+            }
+        };
         senders.remove(peer_id);
         senders.len()
     };
 
-    runtime
-        .lock()
-        .expect("daemon runtime mutex should not be poisoned")
-        .mark_disconnected(peer_id);
+    match runtime.lock() {
+        Ok(mut runtime) => {
+            if let Err(e) = runtime.mark_disconnected(peer_id) {
+                warn!(peer = %peer_id, error = %e, "failed to mark disconnected");
+            }
+        }
+        Err(e) => {
+            error!("daemon runtime mutex poisoned: {}", e);
+            warn!(peer = %peer_id, "failed to mark disconnected due to mutex poisoning");
+        }
+    }
     suppression_state.store(false, Ordering::SeqCst);
     refresh_and_persist_status_snapshot(runtime, status_snapshot, status_path);
     warn!(peer = %peer_id, sender_count, "marked session lost and removed sender registration");
@@ -333,12 +415,12 @@ mod tests {
     }
 
     impl InputEventSink for RecordingSink {
-        fn handle(&mut self, event: &InputEvent) -> Result<(), String> {
+        fn handle(&mut self, event: &InputEvent) -> anyhow::Result<()> {
             self.handled_events.push(event.clone());
             Ok(())
         }
 
-        fn release_all(&mut self) -> Result<(), String> {
+        fn release_all(&mut self) -> anyhow::Result<()> {
             self.release_calls += 1;
             Ok(())
         }
@@ -386,7 +468,7 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id);
+            runtime.mark_authenticated(peer_id).expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
         session_senders
@@ -474,7 +556,7 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id);
+            runtime.mark_authenticated(peer_id).expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
         session_senders
@@ -553,8 +635,8 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id);
-            runtime.mark_authenticated(spare_peer_id);
+            runtime.mark_authenticated(peer_id).expect("should authenticate");
+            runtime.mark_authenticated(spare_peer_id).expect("should authenticate");
             runtime
                 .toggle_controller()
                 .expect("should enter control for the active peer");
@@ -625,7 +707,7 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated("controlled-pc");
+            runtime.mark_authenticated("controlled-pc").expect("should authenticate");
             runtime.toggle_controller().expect("should enter Controlling");
         }
 
@@ -668,7 +750,7 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated("office-pc");
+            runtime.mark_authenticated("office-pc").expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
 

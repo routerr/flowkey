@@ -3,6 +3,14 @@ use flowkey_input::keycode::{parse_key_code, KeyCode, ModifierKind};
 use flowkey_input::InputEventSink;
 use tracing::warn;
 
+/// Initial backoff duration for connection retry.
+/// Starts at 1 second, doubles on each retry until MAX_RECONNECT_BACKOFF_SECS.
+const INITIAL_RECONNECT_BACKOFF_SECS: u64 = 1;
+
+/// Maximum duration for reconnect backoff before reset.
+/// Prevents excessive retry delays after extended disconnections.
+const MAX_RECONNECT_BACKOFF_SECS: u64 = 8;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RecoveryState {
     pub forced_key_releases: usize,
@@ -53,7 +61,7 @@ impl ReconnectBackoff {
 
 impl Default for ReconnectBackoff {
     fn default() -> Self {
-        Self::new(1, 8)
+        Self::new(INITIAL_RECONNECT_BACKOFF_SECS, MAX_RECONNECT_BACKOFF_SECS)
     }
 }
 

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use arc_swap::ArcSwap;
 use flowkey_config::Config;
 use flowkey_core::daemon::DaemonRuntime;
@@ -29,6 +29,10 @@ use crate::session_flow::setup_and_run_session;
 use crate::status_writer::{
     advertise_discovery_service, clear_status_snapshot, refresh_and_persist_status_snapshot,
 };
+
+/// Duration to suppress loopback input events after local injection.
+/// Prevents self-echoed keystrokes from reappearing in remote streams.
+const LOOPBACK_SUPPRESSION_MS: u64 = 40;
 
 pub async fn run_daemon(config: Config) -> Result<()> {
     run_daemon_with_shutdown(config, CancellationToken::new()).await
@@ -67,12 +71,15 @@ pub(crate) async fn run_daemon_with_shutdown(
     let status_snapshot = Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(
         &runtime
             .lock()
-            .expect("daemon runtime mutex should not be poisoned"),
+            .map_err(|e| {
+                error!("daemon runtime mutex poisoned: {}", e);
+                anyhow!("daemon state unavailable")
+            })?,
     )));
     let suppression_state = Arc::new(AtomicBool::new(false));
     let session_senders: Arc<Mutex<HashMap<String, SessionSender>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    let loopback = LoopbackSuppressor::shared(Duration::from_millis(40));
+    let loopback = LoopbackSuppressor::shared(Duration::from_millis(LOOPBACK_SUPPRESSION_MS));
     seed_platform_diagnostics(&runtime);
     let discovery = advertise_discovery_service(&config, &runtime, &status_snapshot, &status_path);
 
@@ -297,7 +304,10 @@ pub(crate) async fn run_daemon_with_shutdown(
     clear_status_snapshot(&status_path);
     let runtime = runtime
         .lock()
-        .expect("daemon runtime mutex should not be poisoned");
+        .map_err(|e| {
+            error!("daemon runtime mutex poisoned: {}", e);
+            anyhow!("daemon state unavailable")
+        })?;
     info!(sessions = runtime.sessions.len(), state = ?runtime.state, "daemon stopped");
 
     Ok(())

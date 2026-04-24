@@ -6,11 +6,11 @@ use flowkey_crypto::{HandshakeOffer, NodeIdentity};
 use flowkey_daemon::run_daemon;
 use std::path::Path;
 use std::time::Duration;
-#[cfg(target_os = "windows")]
-use tokio::net::windows::named_pipe::ClientOptions;
-use tokio::net::TcpListener;
 #[cfg(target_os = "macos")]
-use tokio::net::UnixStream;
+use flowkey_platform_macos::control_ipc::connect_to_control_socket;
+#[cfg(target_os = "windows")]
+use flowkey_platform_windows::control_ipc::connect_to_control_pipe;
+use tokio::net::TcpListener;
 use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
@@ -181,20 +181,11 @@ async fn main() -> Result<()> {
 
             #[cfg(target_os = "macos")]
             {
-                if socket_path.exists() {
-                    match UnixStream::connect(&socket_path).await {
-                        Ok(mut stream) => {
-                            if let Ok(()) =
-                                DaemonCommand::switch(&peer_id).send_to(&mut stream).await
-                            {
-                                info!(%peer_id, path = %socket_path.display(), "sent switch request to daemon socket");
-                                println!("switch request sent to daemon");
-                                sent_via_socket = true;
-                            }
-                        }
-                        Err(_) => {
-                            // Daemon might not be running or socket is stale
-                        }
+                if let Some(mut stream) = connect_to_control_socket(&socket_path).await {
+                    if let Ok(()) = DaemonCommand::switch(&peer_id).send_to(&mut stream).await {
+                        info!(%peer_id, path = %socket_path.display(), "sent switch request to daemon socket");
+                        println!("switch request sent to daemon");
+                        sent_via_socket = true;
                     }
                 }
             }
@@ -202,17 +193,14 @@ async fn main() -> Result<()> {
             #[cfg(target_os = "windows")]
             {
                 let pipe_name = config.control_pipe_name();
-                match ClientOptions::new().open(&pipe_name) {
-                    Ok(mut pipe) => {
-                        if let Ok(()) = DaemonCommand::switch(&peer_id).send_to(&mut pipe).await {
-                            info!(%peer_id, pipe = %pipe_name, "sent switch request to daemon pipe");
-                            println!("switch request sent to daemon");
-                            sent_via_socket = true;
-                        }
+                if let Some(mut pipe) = connect_to_control_pipe(&pipe_name).await {
+                    if let Ok(()) = DaemonCommand::switch(&peer_id).send_to(&mut pipe).await {
+                        info!(%peer_id, pipe = %pipe_name, "sent switch request to daemon pipe");
+                        println!("switch request sent to daemon");
+                        sent_via_socket = true;
                     }
-                    Err(error) => {
-                        warn!(%error, pipe = %pipe_name, "failed to open daemon control pipe");
-                    }
+                } else {
+                    warn!(pipe = %pipe_name, "failed to open daemon control pipe");
                 }
             }
 
@@ -231,18 +219,11 @@ async fn main() -> Result<()> {
 
             #[cfg(target_os = "macos")]
             {
-                if socket_path.exists() {
-                    match UnixStream::connect(&socket_path).await {
-                        Ok(mut stream) => {
-                            if let Ok(()) = DaemonCommand::release().send_to(&mut stream).await {
-                                info!(path = %socket_path.display(), "sent release request to daemon socket");
-                                println!("release request sent to daemon");
-                                sent_via_socket = true;
-                            }
-                        }
-                        Err(_) => {
-                            // Daemon might not be running or socket is stale
-                        }
+                if let Some(mut stream) = connect_to_control_socket(&socket_path).await {
+                    if let Ok(()) = DaemonCommand::release().send_to(&mut stream).await {
+                        info!(path = %socket_path.display(), "sent release request to daemon socket");
+                        println!("release request sent to daemon");
+                        sent_via_socket = true;
                     }
                 }
             }
@@ -250,17 +231,14 @@ async fn main() -> Result<()> {
             #[cfg(target_os = "windows")]
             {
                 let pipe_name = config.control_pipe_name();
-                match ClientOptions::new().open(&pipe_name) {
-                    Ok(mut pipe) => {
-                        if let Ok(()) = DaemonCommand::release().send_to(&mut pipe).await {
-                            info!(path = %pipe_name, "sent release request to daemon pipe");
-                            println!("release request sent to daemon");
-                            sent_via_socket = true;
-                        }
+                if let Some(mut pipe) = connect_to_control_pipe(&pipe_name).await {
+                    if let Ok(()) = DaemonCommand::release().send_to(&mut pipe).await {
+                        info!(path = %pipe_name, "sent release request to daemon pipe");
+                        println!("release request sent to daemon");
+                        sent_via_socket = true;
                     }
-                    Err(error) => {
-                        warn!(%error, pipe = %pipe_name, "failed to open daemon control pipe");
-                    }
+                } else {
+                    warn!(pipe = %pipe_name, "failed to open daemon control pipe");
                 }
             }
 
