@@ -174,6 +174,7 @@ pub(crate) fn spawn_hotkey_watcher(
                         ) {
                             runtime.active_peer_id.clone()
                         } else {
+                            warn!(event = ?event, state = ?runtime.state, "dropping captured input: not in Controlling state");
                             None
                         }
                     };

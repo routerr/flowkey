@@ -334,7 +334,13 @@ impl CaptureState {
         pressed: bool,
         timestamp_us: u64,
     ) -> Option<InputEvent> {
-        let code = normalize_key_code(key)?.to_string();
+        let code = match normalize_key_code(key) {
+            Some(code) => code.to_string(),
+            None => {
+                tracing::warn!(target: "keyboard_trace", physical_key = ?key, "rdev key not mapped, dropping");
+                return None;
+            }
+        };
         let mut modifiers = self.modifiers;
 
         match key {

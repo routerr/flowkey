@@ -108,6 +108,7 @@ struct SessionSenderInner {
     shutdown: AtomicBool,
     channel_closed: Arc<AtomicBool>,
     sender_refs: AtomicUsize,
+    dropped_inputs: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -147,6 +148,7 @@ impl SessionSenderInner {
             shutdown: AtomicBool::new(false),
             channel_closed: Arc::new(AtomicBool::new(false)),
             sender_refs: AtomicUsize::new(1),
+            dropped_inputs: AtomicUsize::new(0),
         });
         Self::spawn_flush_worker(&inner);
         inner
@@ -282,7 +284,8 @@ impl SessionSenderInner {
         match self.sender.try_send(SessionCommand::Input(event)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => {
-                warn!("session channel full; dropping input event");
+                let dropped = self.dropped_inputs.fetch_add(1, Ordering::SeqCst) + 1;
+                warn!(dropped, "session channel full; dropping input event");
                 Ok(())
             }
             Err(TrySendError::Disconnected(_)) => {
