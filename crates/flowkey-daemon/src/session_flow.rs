@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use arc_swap::ArcSwap;
 use flowkey_config::Config;
 use flowkey_core::daemon::{DaemonRuntime, DaemonState, Role};
@@ -60,17 +60,6 @@ impl DaemonSessionCallback {
             }
         };
         (result, state_before, state_after)
-    }
-
-    /// Reads the current daemon state without mutation.
-    fn read_state(&self) -> DaemonState {
-        match self.runtime.lock() {
-            Ok(runtime) => runtime.state.clone(),
-            Err(e) => {
-                error!("daemon runtime mutex poisoned: {}", e);
-                DaemonState::Disconnected
-            }
-        }
     }
 
     /// Generic handler for state transitions with logging.
@@ -194,7 +183,7 @@ pub(crate) async fn setup_and_run_session(
                 Err(e) => {
                     error!("daemon runtime mutex poisoned: {}", e);
                     warn!(peer = %peer_id, "failed to toggle controller due to mutex poisoning");
-                    return;
+                    return Duration::ZERO;
                 }
             };
             if !matches!(runtime_guard.state, DaemonState::Controlling { .. }) {
