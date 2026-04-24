@@ -211,7 +211,6 @@ pub(crate) fn spawn_hotkey_watcher(
                             }
                         }
                     };
-                    };
 
                     if let Some(peer_id) = active_peer_id {
                         let sender = session_senders

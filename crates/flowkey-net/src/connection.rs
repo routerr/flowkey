@@ -175,7 +175,7 @@ impl SessionSenderInner {
             Err(e) => {
                 error!("input coalescer mutex poisoned: {}", e);
                 self.mark_channel_closed();
-                return anyhow::bail!("coalescer unavailable");
+                anyhow::bail!("coalescer unavailable");
             }
         };
         if let Err(error) = Self::flush_scroll_locked(&self.sender, &mut state) {
@@ -237,7 +237,7 @@ impl SessionSenderInner {
             Err(e) => {
                 error!("input coalescer mutex poisoned: {}", e);
                 self.mark_channel_closed();
-                return anyhow::bail!("coalescer unavailable");
+                anyhow::bail!("coalescer unavailable");
             }
         };
         if let Err(error) = Self::flush_move_locked(&self.sender, &mut state) {
@@ -286,7 +286,7 @@ impl SessionSenderInner {
             Err(e) => {
                 error!("input coalescer mutex poisoned: {}", e);
                 self.mark_channel_closed();
-                return anyhow::bail!("coalescer unavailable");
+                anyhow::bail!("coalescer unavailable");
             }
         };
         if let Err(error) = Self::flush_move_locked(&self.sender, &mut state) {
@@ -318,7 +318,7 @@ impl SessionSenderInner {
             Err(e) => {
                 error!("input coalescer mutex poisoned: {}", e);
                 self.mark_channel_closed();
-                return anyhow::bail!("coalescer unavailable");
+                anyhow::bail!("coalescer unavailable");
             }
         };
         state.pending_move = None;
