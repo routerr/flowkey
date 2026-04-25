@@ -286,14 +286,26 @@ impl ModifierTracker {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl CaptureState {
-    pub fn sync_modifiers(&mut self, modifiers: Modifiers) {
-        self.modifiers = modifiers;
-        // Best effort: set the Left variant to match the aggregate state.
-        // This ensures the next release event correctly clears the bit.
-        self.tracker.shift_l = modifiers.shift;
-        self.tracker.ctrl_l = modifiers.control;
-        self.tracker.alt_l = modifiers.alt;
-        self.tracker.meta_l = modifiers.meta;
+    pub fn sync_physical_modifiers(
+        &mut self,
+        shift_l: bool,
+        shift_r: bool,
+        ctrl_l: bool,
+        ctrl_r: bool,
+        alt_l: bool,
+        alt_r: bool,
+        meta_l: bool,
+        meta_r: bool,
+    ) {
+        self.tracker.shift_l = shift_l;
+        self.tracker.shift_r = shift_r;
+        self.tracker.ctrl_l = ctrl_l;
+        self.tracker.ctrl_r = ctrl_r;
+        self.tracker.alt_l = alt_l;
+        self.tracker.alt_r = alt_r;
+        self.tracker.meta_l = meta_l;
+        self.tracker.meta_r = meta_r;
+        self.modifiers = self.tracker.to_modifiers();
     }
 
     pub fn translate(

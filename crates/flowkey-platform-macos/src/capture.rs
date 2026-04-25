@@ -379,37 +379,38 @@ unsafe extern "C" fn raw_callback(
         return std::ptr::null_mut();
     }
 
-    let Some(translated_event) = convert_cg_event(event_type, &cg_event, &mut context.last_flags)
-    else {
+    let translated_events = convert_cg_event(event_type, &cg_event, &mut context.last_flags);
+    if translated_events.is_empty() {
         return cg_event.as_ptr();
     };
 
-    match context.state.translate(
-        translated_event.clone(),
-        &mut context.tracker,
-        context.loopback.as_ref(),
-    ) {
-        Some(CaptureSignal::HotkeyPressed) => {
-            let _ = context.sender.send(CaptureSignal::HotkeyPressed);
-            // Drop the hotkey key itself so it does not leak to local apps.
-            std::ptr::null_mut()
-        }
-        Some(CaptureSignal::HotkeySuppressed) => {
-            // Always deliver key release for hotkey modifiers locally,
-            // otherwise stuck-key behavior.
-            cg_event.as_ptr()
-        }
-        Some(CaptureSignal::Input(input)) => {
-            let _ = context.sender.send(CaptureSignal::Input(input));
-            if suppress_active {
-                // Fully drop local input while controlling remote (explicit mode).
-                std::ptr::null_mut()
-            } else {
-                cg_event.as_ptr()
+    let mut final_ptr = cg_event.as_ptr();
+    for translated_event in translated_events {
+        match context.state.translate(
+            translated_event.clone(),
+            &mut context.tracker,
+            context.loopback.as_ref(),
+        ) {
+            Some(CaptureSignal::HotkeyPressed) => {
+                let _ = context.sender.send(CaptureSignal::HotkeyPressed);
+                // Drop the hotkey key itself so it does not leak to local apps.
+                final_ptr = std::ptr::null_mut();
             }
+            Some(CaptureSignal::HotkeySuppressed) => {
+                // Always deliver key release for hotkey modifiers locally,
+                // otherwise stuck-key behavior.
+            }
+            Some(CaptureSignal::Input(input)) => {
+                let _ = context.sender.send(CaptureSignal::Input(input));
+                if suppress_active {
+                    // Fully drop local input while controlling remote (explicit mode).
+                    final_ptr = std::ptr::null_mut();
+                }
+            }
+            None => {}
         }
-        None => cg_event.as_ptr(),
     }
+    final_ptr
 }
 
 fn event_mask(events: &[CGEventType]) -> u64 {
@@ -422,8 +423,10 @@ fn convert_cg_event(
     event_type: CGEventType,
     event: &CGEvent,
     last_flags: &mut CGEventFlags,
-) -> Option<Event> {
+) -> Vec<Event> {
     let now = SystemTime::now();
+    let mut generated = Vec::new();
+
     let event_type = match event_type {
         CGEventType::LeftMouseDown => EventType::ButtonPress(Button::Left),
         CGEventType::LeftMouseUp => EventType::ButtonRelease(Button::Left),
@@ -436,7 +439,7 @@ fn convert_cg_event(
         | CGEventType::RightMouseDragged
         | CGEventType::OtherMouseDragged => {
             let point = event.location();
-            return Some(Event {
+            generated.push(Event {
                 time: now,
                 name: None,
                 event_type: EventType::MouseMove {
@@ -444,6 +447,7 @@ fn convert_cg_event(
                     y: point.y,
                 },
             });
+            return generated;
         }
         CGEventType::KeyDown => EventType::KeyPress(key_from_code(
             event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16,
@@ -455,39 +459,53 @@ fn convert_cg_event(
             let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
             let current_flags = event.get_flags();
             let key = key_from_code(code);
-            // Check the specific modifier bit for this key in current_flags rather
-            // than comparing the full flags word numerically. Numeric comparison
-            // is unreliable when non-modifier system flags (e.g. CGEventFlagNonCoalesced)
-            // are present alongside modifier bits: the total can increase even when
-            // the specific modifier being reported was cleared (release), producing
-            // phantom key-press events.
-            let event_type = if key_flag_is_set(code, current_flags) {
+            let is_set = key_flag_is_set(code, current_flags);
+            *last_flags = current_flags;
+            
+            // CapsLock (57) only emits an event when its state toggles (light on/off).
+            // This means one physical press = one FlagsChanged event.
+            // We simulate a full physical click (Press + Release) so the remote OS sees a complete key stroke.
+            if code == 57 {
+                generated.push(Event {
+                    time: now,
+                    name: None,
+                    event_type: EventType::KeyPress(key),
+                });
+                generated.push(Event {
+                    time: now,
+                    name: None,
+                    event_type: EventType::KeyRelease(key),
+                });
+                return generated;
+            }
+
+            if is_set {
                 EventType::KeyPress(key)
             } else {
                 EventType::KeyRelease(key)
-            };
-            *last_flags = current_flags;
-            event_type
+            }
         }
         CGEventType::ScrollWheel => {
             let delta_y =
                 event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1);
             let delta_x =
                 event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2);
-            return Some(Event {
+            generated.push(Event {
                 time: now,
                 name: None,
                 event_type: EventType::Wheel { delta_x, delta_y },
             });
+            return generated;
         }
-        _ => return None,
+        _ => return generated,
     };
 
-    Some(Event {
+    generated.push(Event {
         time: now,
         name: None,
         event_type,
-    })
+    });
+    generated
 }
 
 /// Returns `true` if the modifier bit corresponding to `code` is active in `flags`.

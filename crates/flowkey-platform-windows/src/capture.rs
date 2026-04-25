@@ -14,7 +14,8 @@ use tracing::{debug, info, warn};
 use windows_sys::Win32::Foundation::{GetLastError, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    GetAsyncKeyState, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RMENU, VK_RSHIFT,
+    VK_RWIN,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, SetWindowsHookExW,
@@ -629,24 +630,28 @@ fn spawn_grab_thread(
             let mut capture_state = CaptureState::default();
 
             // Sync initial modifier state from OS
-            let mut modifiers = flowkey_input::event::Modifiers::none();
+            let mut shift_l = false;
+            let mut shift_r = false;
+            let mut ctrl_l = false;
+            let mut ctrl_r = false;
+            let mut alt_l = false;
+            let mut alt_r = false;
+            let mut meta_l = false;
+            let mut meta_r = false;
+
             unsafe {
-                if GetAsyncKeyState(VK_SHIFT as i32) as u16 & 0x8000 != 0 {
-                    modifiers.shift = true;
-                }
-                if GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000 != 0 {
-                    modifiers.control = true;
-                }
-                if GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000 != 0 {
-                    modifiers.alt = true;
-                }
-                if (GetAsyncKeyState(VK_LWIN as i32) as u16 & 0x8000 != 0)
-                    || (GetAsyncKeyState(VK_RWIN as i32) as u16 & 0x8000 != 0)
-                {
-                    modifiers.meta = true;
-                }
+                shift_l = GetAsyncKeyState(VK_LSHIFT as i32) as u16 & 0x8000 != 0;
+                shift_r = GetAsyncKeyState(VK_RSHIFT as i32) as u16 & 0x8000 != 0;
+                ctrl_l = GetAsyncKeyState(VK_LCONTROL as i32) as u16 & 0x8000 != 0;
+                ctrl_r = GetAsyncKeyState(VK_RCONTROL as i32) as u16 & 0x8000 != 0;
+                alt_l = GetAsyncKeyState(VK_LMENU as i32) as u16 & 0x8000 != 0;
+                alt_r = GetAsyncKeyState(VK_RMENU as i32) as u16 & 0x8000 != 0;
+                meta_l = GetAsyncKeyState(VK_LWIN as i32) as u16 & 0x8000 != 0;
+                meta_r = GetAsyncKeyState(VK_RWIN as i32) as u16 & 0x8000 != 0;
             }
-            capture_state.sync_modifiers(modifiers);
+            capture_state.sync_physical_modifiers(
+                shift_l, shift_r, ctrl_l, ctrl_r, alt_l, alt_r, meta_l, meta_r,
+            );
 
             *cell.borrow_mut() = Some(NativeGrabState {
                 tracker: HotkeyTracker::new(binding),
@@ -670,7 +675,10 @@ fn spawn_grab_thread(
             let ret = unsafe { GetMessageW(&mut msg, null_mut(), 0, 0) };
             match ret {
                 0 | -1 => break,
-                _ => {}
+                _ => unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
+                    windows_sys::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
+                },
             }
         }
 
