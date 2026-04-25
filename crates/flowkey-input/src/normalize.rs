@@ -111,6 +111,7 @@ pub fn normalize_key_code(key: rdev::Key) -> Option<&'static str> {
         rdev::Key::Insert => Some("Insert"),
         rdev::Key::Delete => Some("Delete"),
         rdev::Key::CapsLock => Some("CapsLock"),
+        rdev::Key::Function => Some("CapsLock"), // Map Mac Fn/Globe language switch key to Windows CapsLock
         rdev::Key::NumLock => Some("NumLock"),
         rdev::Key::ScrollLock => Some("ScrollLock"),
         rdev::Key::PrintScreen => Some("PrintScreen"),
