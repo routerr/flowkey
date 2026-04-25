@@ -630,14 +630,14 @@ fn spawn_grab_thread(
             let mut capture_state = CaptureState::default();
 
             // Sync initial modifier state from OS
-            let mut shift_l = false;
-            let mut shift_r = false;
-            let mut ctrl_l = false;
-            let mut ctrl_r = false;
-            let mut alt_l = false;
-            let mut alt_r = false;
-            let mut meta_l = false;
-            let mut meta_r = false;
+            let shift_l;
+            let shift_r;
+            let ctrl_l;
+            let ctrl_r;
+            let alt_l;
+            let alt_r;
+            let meta_l;
+            let meta_r;
 
             unsafe {
                 shift_l = GetAsyncKeyState(VK_LSHIFT as i32) as u16 & 0x8000 != 0;
