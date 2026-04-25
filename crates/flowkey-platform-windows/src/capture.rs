@@ -12,6 +12,10 @@ use flowkey_input::hotkey::{HotkeyBinding, HotkeyTracker};
 use flowkey_input::loopback::SharedLoopbackSuppressor;
 use tracing::{debug, info, warn};
 use windows_sys::Win32::Foundation::{GetLastError, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, SetWindowsHookExW,
     UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT, MSG,
@@ -302,7 +306,7 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
     match state.tracker.process(&input) {
         flowkey_input::hotkey::HotkeyOutcome::Pressed => {
             let _ = state.sender.send(CaptureSignal::HotkeyPressed);
-            return suppress_local; // pass hotkey chord through if not suppressing, otherwise suppress so it doesn't leak
+            return true; // suppress hotkey activation to prevent leakage to foreground app
         }
         flowkey_input::hotkey::HotkeyOutcome::Suppressed => {
             return true; // suppress chord release sequence
@@ -594,60 +598,11 @@ fn spawn_grab_thread(
     suppression_enabled: Arc<AtomicBool>,
     sender: mpsc::Sender<CaptureSignal>,
 ) -> thread::JoinHandle<()> {
-    // Spawn mouse hook thread
-    let mouse_loopback = loopback.clone();
-    let mouse_suppression = Arc::clone(&suppression_enabled);
-    let mouse_sender = sender.clone();
-    let _mouse_thread = thread::spawn(move || {
-        let ms_hook: HHOOK = unsafe {
-            SetWindowsHookExW(WH_MOUSE_LL, Some(native_mouse_proc), null_mut(), 0)
-        };
-        if ms_hook.is_null() {
-            let err = unsafe { GetLastError() };
-            warn!(error_code = err, "failed to install WH_MOUSE_LL hook");
-            return;
-        }
-        NATIVE_MOUSE_HOOK.store(hook_to_isize(ms_hook), Ordering::SeqCst);
-        info!("WH_MOUSE_LL hook installed");
-
-        // We share the same ThreadLocal type but only process mouse events on this thread.
-        // It's safe because the thread local is per-thread.
-        GRAB_STATE.with(|cell| {
-            // Mouse thread doesn't need hotkey tracker, just a dummy binding.
-            *cell.borrow_mut() = Some(NativeGrabState {
-                tracker: HotkeyTracker::new(HotkeyBinding::parse("F24").unwrap()),
-                capture_state: CaptureState::default(),
-                loopback: mouse_loopback,
-                suppression_enabled: mouse_suppression,
-                sender: mouse_sender,
-                pending_recenter: None,
-            });
-        });
-
-        let mut msg = MSG {
-            hwnd: null_mut(),
-            message: 0,
-            wParam: 0,
-            lParam: 0,
-            time: 0,
-            pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
-        };
-        loop {
-            let ret = unsafe { GetMessageW(&mut msg, null_mut(), 0, 0) };
-            match ret {
-                0 | -1 => break,
-                _ => {}
-            }
-        }
-
-        GRAB_STATE.with(|cell| drop(cell.borrow_mut().take()));
-        unsafe { UnhookWindowsHookEx(ms_hook) };
-        NATIVE_MOUSE_HOOK.store(0, Ordering::SeqCst);
-    });
-
     thread::spawn(move || {
+        let hmod = unsafe { GetModuleHandleW(null_mut()) };
+
         let kb_hook: HHOOK = unsafe {
-            SetWindowsHookExW(WH_KEYBOARD_LL, Some(native_keyboard_proc), null_mut(), 0)
+            SetWindowsHookExW(WH_KEYBOARD_LL, Some(native_keyboard_proc), hmod, 0)
         };
         if kb_hook.is_null() {
             let err = unsafe { GetLastError() };
@@ -657,10 +612,45 @@ fn spawn_grab_thread(
         NATIVE_KEYBOARD_HOOK.store(hook_to_isize(kb_hook), Ordering::SeqCst);
         info!("WH_KEYBOARD_LL hook installed");
 
+        let ms_hook: HHOOK = unsafe {
+            SetWindowsHookExW(WH_MOUSE_LL, Some(native_mouse_proc), hmod, 0)
+        };
+        if ms_hook.is_null() {
+            let err = unsafe { GetLastError() };
+            warn!(error_code = err, "failed to install WH_MOUSE_LL hook");
+            unsafe { UnhookWindowsHookEx(kb_hook) };
+            NATIVE_KEYBOARD_HOOK.store(0, Ordering::SeqCst);
+            return;
+        }
+        NATIVE_MOUSE_HOOK.store(hook_to_isize(ms_hook), Ordering::SeqCst);
+        info!("WH_MOUSE_LL hook installed");
+
         GRAB_STATE.with(|cell| {
+            let mut capture_state = CaptureState::default();
+
+            // Sync initial modifier state from OS
+            let mut modifiers = flowkey_input::event::Modifiers::none();
+            unsafe {
+                if GetAsyncKeyState(VK_SHIFT as i32) as u16 & 0x8000 != 0 {
+                    modifiers.shift = true;
+                }
+                if GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000 != 0 {
+                    modifiers.control = true;
+                }
+                if GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000 != 0 {
+                    modifiers.alt = true;
+                }
+                if (GetAsyncKeyState(VK_LWIN as i32) as u16 & 0x8000 != 0)
+                    || (GetAsyncKeyState(VK_RWIN as i32) as u16 & 0x8000 != 0)
+                {
+                    modifiers.meta = true;
+                }
+            }
+            capture_state.sync_modifiers(modifiers);
+
             *cell.borrow_mut() = Some(NativeGrabState {
                 tracker: HotkeyTracker::new(binding),
-                capture_state: CaptureState::default(),
+                capture_state,
                 loopback,
                 suppression_enabled,
                 sender,
@@ -684,12 +674,13 @@ fn spawn_grab_thread(
             }
         }
 
-        // When keyboard thread exits, wait for mouse thread if possible or let it detach?
-        // Let it run until process exits or we implement a full stop.
-
         GRAB_STATE.with(|cell| drop(cell.borrow_mut().take()));
-        unsafe { UnhookWindowsHookEx(kb_hook) };
+        unsafe {
+            UnhookWindowsHookEx(kb_hook);
+            UnhookWindowsHookEx(ms_hook);
+        };
         NATIVE_KEYBOARD_HOOK.store(0, Ordering::SeqCst);
+        NATIVE_MOUSE_HOOK.store(0, Ordering::SeqCst);
     })
 }
 

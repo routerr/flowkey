@@ -256,10 +256,46 @@ mod supervisor_tests {
 pub struct CaptureState {
     pub last_mouse_position: Option<(f64, f64)>,
     pub modifiers: Modifiers,
+    tracker: ModifierTracker,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ModifierTracker {
+    shift_l: bool,
+    shift_r: bool,
+    ctrl_l: bool,
+    ctrl_r: bool,
+    alt_l: bool,
+    alt_r: bool,
+    meta_l: bool,
+    meta_r: bool,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl ModifierTracker {
+    fn to_modifiers(&self) -> Modifiers {
+        Modifiers {
+            shift: self.shift_l || self.shift_r,
+            control: self.ctrl_l || self.ctrl_r,
+            alt: self.alt_l || self.alt_r,
+            meta: self.meta_l || self.meta_r,
+        }
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl CaptureState {
+    pub fn sync_modifiers(&mut self, modifiers: Modifiers) {
+        self.modifiers = modifiers;
+        // Best effort: set the Left variant to match the aggregate state.
+        // This ensures the next release event correctly clears the bit.
+        self.tracker.shift_l = modifiers.shift;
+        self.tracker.ctrl_l = modifiers.control;
+        self.tracker.alt_l = modifiers.alt;
+        self.tracker.meta_l = modifiers.meta;
+    }
+
     pub fn translate(
         &mut self,
         event: rdev::Event,
@@ -341,17 +377,21 @@ impl CaptureState {
                 return None;
             }
         };
-        let mut modifiers = self.modifiers;
 
         match key {
-            rdev::Key::ShiftLeft | rdev::Key::ShiftRight => modifiers.shift = pressed,
-            rdev::Key::ControlLeft | rdev::Key::ControlRight => modifiers.control = pressed,
-            rdev::Key::Alt | rdev::Key::AltGr => modifiers.alt = pressed,
-            rdev::Key::MetaLeft | rdev::Key::MetaRight => modifiers.meta = pressed,
+            rdev::Key::ShiftLeft => self.tracker.shift_l = pressed,
+            rdev::Key::ShiftRight => self.tracker.shift_r = pressed,
+            rdev::Key::ControlLeft => self.tracker.ctrl_l = pressed,
+            rdev::Key::ControlRight => self.tracker.ctrl_r = pressed,
+            rdev::Key::Alt => self.tracker.alt_l = pressed,
+            rdev::Key::AltGr => self.tracker.alt_r = pressed,
+            rdev::Key::MetaLeft => self.tracker.meta_l = pressed,
+            rdev::Key::MetaRight => self.tracker.meta_r = pressed,
             _ => {}
         }
 
-        self.modifiers = modifiers;
+        self.modifiers = self.tracker.to_modifiers();
+        let modifiers = self.modifiers;
         #[cfg(target_os = "windows")]
         debug!(
             target: "keyboard_trace",
