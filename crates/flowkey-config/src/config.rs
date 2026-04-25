@@ -44,7 +44,7 @@ pub enum CaptureMode {
 
 impl Default for CaptureMode {
     fn default() -> Self {
-        Self::Passive
+        Self::Exclusive
     }
 }
 
@@ -586,24 +586,25 @@ mod tests {
     }
 
     #[test]
-    fn legacy_switch_config_defaults_capture_mode_to_passive() {
+    fn legacy_switch_config_defaults_capture_mode_to_exclusive() {
         let decoded: Config = toml::from_str(
             r#"
-[node]
-id = "local-node"
-name = "Local Node"
-listen_addr = "0.0.0.0:48571"
-accept_remote_control = true
-private_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-public_key = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    [node]
+    id = "legacy"
+    name = "Legacy Node"
+    listen_addr = "0.0.0.0:48571"
+    accept_remote_control = true
+    private_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    public_key = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
 
-[switch]
-hotkey = "Ctrl+Alt+Shift+K"
-"#,
+    [switch]
+    hotkey = "Ctrl+Alt+Shift+K"
+    "#,
         )
         .expect("legacy config should deserialize");
 
-        assert_eq!(decoded.switch.capture_mode, CaptureMode::Passive);
+        assert_eq!(decoded.switch.capture_mode, CaptureMode::Exclusive);
+
         assert_eq!(
             decoded.switch.input_coalesce_window_ms,
             super::DEFAULT_INPUT_COALESCE_WINDOW_MS

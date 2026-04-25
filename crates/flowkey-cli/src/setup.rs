@@ -63,15 +63,15 @@ pub async fn run_interactive_setup() -> Result<()> {
 
     // 4. Configure Capture Mode
     let capture_modes = vec![
+        "Exclusive (Recommended - input events are intercepted and suppressed on the local machine when switching)",
         "Passive (Standard - input events are captured and passed through)",
-        "Exclusive (Advanced - input events are intercepted and suppressed on the local machine when switching)",
     ];
 
     let current_capture_mode = config.switch.capture_mode;
     println!("Current capture mode is: {}", current_capture_mode.as_str());
 
     let capture_mode_choice = Select::new("Choose a capture mode:", capture_modes)
-        .with_help_message("Passive is recommended for most users. Exclusive mode provides better isolation but requires more permissions.")
+        .with_help_message("Exclusive mode is recommended for proper isolation. Passive mode sends inputs to the remote but also executes them locally.")
         .prompt()
         .context("failed to prompt for capture mode")?;
 
