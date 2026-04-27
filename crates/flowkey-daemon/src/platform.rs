@@ -33,7 +33,7 @@ pub(crate) fn spawn_hotkey_watcher(
         Option<Arc<AtomicU64>>,
     ) = create_platform_input_capture(
         binding,
-        loopback,
+        loopback.clone(),
         capture_mode,
         Arc::clone(&suppression_state),
     );
@@ -146,6 +146,12 @@ pub(crate) fn spawn_hotkey_watcher(
                                         match &state {
                                             DaemonState::Controlling { .. } => {
                                                 capture.set_suppression_enabled(true);
+
+                                                // Release local keys to prevent stuck modifiers from the hotkey
+                                                // trigger or other keys pressed during the transition.
+                                                let (mut sink, _, _) =
+                                                    create_platform_input_sink(loopback.clone());
+                                                let _ = sink.release_all();
                                             }
                                             _ => {
                                                 capture.set_suppression_enabled(false);

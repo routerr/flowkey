@@ -260,18 +260,19 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
     let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
     let vk = kb.vkCode as u16;
 
+    let rdev_key = rdev_key_from_vk(vk);
+
     debug!(
         target: "keyboard_trace",
         platform = "windows",
         wparam = msg_id,
         vk_code = vk,
+        rdev_key = ?rdev_key,
         scan_code = kb.scanCode,
         flags = kb.flags,
         pressed,
         "raw keyboard callback received"
     );
-
-    let rdev_key = rdev_key_from_vk(vk);
     let timestamp_us = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

@@ -462,10 +462,10 @@ fn convert_cg_event(
             let is_set = key_flag_is_set(code, current_flags);
             *last_flags = current_flags;
             
-            // CapsLock (57) only emits an event when its state toggles (light on/off).
+            // CapsLock (57) and Fn/Globe (63) only emit an event when their state toggles.
             // This means one physical press = one FlagsChanged event.
             // We simulate a full physical click (Press + Release) so the remote OS sees a complete key stroke.
-            if code == 57 {
+            if code == 57 || code == 63 {
                 generated.push(Event {
                     time: now,
                     name: None,

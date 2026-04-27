@@ -1,6 +1,10 @@
+#[cfg(target_os = "windows")]
 pub mod capture;
+#[cfg(target_os = "windows")]
 pub mod control_ipc;
+#[cfg(target_os = "windows")]
 pub mod hotkey;
+#[cfg(target_os = "windows")]
 pub mod inject;
+#[cfg(target_os = "windows")]
 pub mod permissions;
-

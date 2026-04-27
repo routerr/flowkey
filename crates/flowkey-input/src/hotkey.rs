@@ -123,13 +123,27 @@ impl HotkeyTracker {
             InputEvent::KeyDown {
                 code, modifiers, ..
             } => {
-                if !self.latched
-                    && self.binding.code_matches(code)
-                    && *modifiers == self.binding.modifiers
-                {
+                let code_matches = self.binding.code_matches(code);
+                let modifiers_match = *modifiers == self.binding.modifiers;
+
+                if !self.latched && code_matches && modifiers_match {
+                    tracing::info!(target: "hotkey", "hotkey triggered: {:?}", self.binding.code);
                     self.latched = true;
                     self.suppress_remaining = self.binding.component_count();
                     return HotkeyOutcome::Pressed;
+                }
+
+                if code_matches || modifiers.shift || modifiers.control || modifiers.alt || modifiers.meta {
+                    tracing::debug!(
+                        target: "hotkey",
+                        code = %code,
+                        code_matches,
+                        modifiers_match,
+                        modifiers = ?modifiers,
+                        expected = ?self.binding.modifiers,
+                        latched = self.latched,
+                        "hotkey matching failed"
+                    );
                 }
             }
             InputEvent::KeyUp { code, .. } => {
