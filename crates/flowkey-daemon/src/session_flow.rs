@@ -404,12 +404,12 @@ mod tests {
     }
 
     impl InputEventSink for RecordingSink {
-        fn handle(&mut self, event: &InputEvent) -> anyhow::Result<()> {
+        fn handle(&mut self, event: &InputEvent) -> Result<(), String> {
             self.handled_events.push(event.clone());
             Ok(())
         }
 
-        fn release_all(&mut self) -> anyhow::Result<()> {
+        fn release_all(&mut self) -> Result<(), String> {
             self.release_calls += 1;
             Ok(())
         }

@@ -16,6 +16,8 @@ extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> i32;
 }
 
+const MACOS_SYNTHETIC_KEYBOARD_EVENT_FLAG_BITS: u64 = 0x2000_0000;
+
 pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result<(), String> {
     let current = match sink.cursor_position {
         Some(pos) => pos,
@@ -207,17 +209,15 @@ pub(super) fn post_key_event(
     };
 
     let flags = build_modifier_flags(&sink.current_modifiers);
-    // Use HIDSystemState source (same as mouse-move, which works reliably)
-    // so the event carries proper system-level keyboard state. Post at HID
-    // level so the event enters the full input pipeline — Session-level
-    // posting with a Private source caused events to be silently ignored
-    // by the macOS text input system on some configurations.
+    // Match Enigo's proven keyboard event shape: session-derived source state,
+    // HID posting location, and the synthetic keyboard flag present on events
+    // macOS accepts reliably. Mouse injection intentionally keeps HIDSystemState.
     //
     // The HID-level event tap will see the injected event, but the loopback
     // suppressor filters it out (via matches_ignoring_timestamp). Even if
     // loopback matching fails, the tap passes the event through because
     // suppress_active is false when this machine is being controlled.
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
         .map_err(|_| "failed to create macOS event source for key event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)
         .map_err(|_| format!("failed to create macOS keyboard event for {code}"))?;
@@ -239,10 +239,9 @@ pub(super) fn post_key_event(
 }
 
 fn build_modifier_flags(modifiers: &super::super::event::Modifiers) -> CGEventFlags {
-    // Start with CGEventFlagNonCoalesced (0x100) which is present on all
-    // real keyboard events from the OS. Some macOS subsystems silently
-    // drop synthetic events that lack this flag.
-    let mut flags = CGEventFlags::CGEventFlagNonCoalesced;
+    // Start with flags present on accepted synthetic macOS keyboard events.
+    let mut flags = CGEventFlags::CGEventFlagNonCoalesced
+        | CGEventFlags::from_bits_retain(MACOS_SYNTHETIC_KEYBOARD_EVENT_FLAG_BITS);
     if modifiers.shift {
         flags |= CGEventFlags::CGEventFlagShift;
     }
@@ -510,6 +509,7 @@ mod tests {
     use super::{
         build_modifier_flags, dock_cursor_zone, dock_proxy_transition, key_code_to_macos_virtual,
         macos_posted_delta, DockCursorZone, DockProxyAction,
+        MACOS_SYNTHETIC_KEYBOARD_EVENT_FLAG_BITS,
     };
     use crate::event::Modifiers;
     use core_graphics::event::CGEventFlags;
@@ -526,9 +526,15 @@ mod tests {
     }
 
     #[test]
-    fn modifier_flags_with_no_modifiers_only_has_non_coalesced() {
+    fn modifier_flags_with_no_modifiers_use_synthetic_keyboard_shape() {
         let flags = build_modifier_flags(&Modifiers::none());
-        assert_eq!(flags, CGEventFlags::CGEventFlagNonCoalesced);
+        assert!(flags.contains(CGEventFlags::CGEventFlagNonCoalesced));
+        assert!(
+            flags.contains(CGEventFlags::from_bits_retain(
+                MACOS_SYNTHETIC_KEYBOARD_EVENT_FLAG_BITS
+            )),
+            "macOS keyboard CGEvents should include the accepted synthetic keyboard flag"
+        );
     }
 
     #[test]
