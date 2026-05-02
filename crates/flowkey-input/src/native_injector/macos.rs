@@ -210,6 +210,38 @@ pub(super) fn post_key_event(
             .map_err(|error| error.to_string());
     };
 
+    // CapsLock requires a synthetic FlagsChanged event with the AlphaShift
+    // flag toggled — posting it as a regular keyboard event does not flip the
+    // system-wide toggle state and will not switch input source on macOS.
+    if keycode == 0x39 {
+        if key_down {
+            sink.caps_lock_active = !sink.caps_lock_active;
+        }
+        let mut flags = build_modifier_flags(&sink.current_modifiers);
+        if sink.caps_lock_active {
+            flags |= CGEventFlags::CGEventFlagAlphaShift;
+        } else {
+            flags &= !CGEventFlags::CGEventFlagAlphaShift;
+        }
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| "failed to create macOS event source for CapsLock".to_string())?;
+        let event = CGEvent::new_keyboard_event(source, keycode, key_down)
+            .map_err(|_| "failed to create macOS CapsLock event".to_string())?;
+        event.set_type(CGEventType::FlagsChanged);
+        event.set_flags(flags);
+        debug!(
+            target: "keyboard_trace",
+            platform = sink.platform,
+            code = %code,
+            macos_keycode = keycode,
+            pressed = key_down,
+            caps_lock_active = sink.caps_lock_active,
+            "posting macOS CapsLock as FlagsChanged at HID level"
+        );
+        event.post(CGEventTapLocation::HID);
+        return Ok(());
+    }
+
     // For modifier keys, build the flags that reflect the new state after
     // this key event so the receiving application sees correct modifier state.
     if let Some(modifier_flag) = modifier_flag_for_keycode(keycode) {
@@ -218,6 +250,9 @@ pub(super) fn post_key_event(
             flags |= modifier_flag;
         } else {
             flags &= !modifier_flag;
+        }
+        if sink.caps_lock_active {
+            flags |= CGEventFlags::CGEventFlagAlphaShift;
         }
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| "failed to create macOS event source for modifier event".to_string())?;
@@ -236,7 +271,10 @@ pub(super) fn post_key_event(
         return Ok(());
     }
 
-    let flags = build_modifier_flags(&sink.current_modifiers);
+    let mut flags = build_modifier_flags(&sink.current_modifiers);
+    if sink.caps_lock_active {
+        flags |= CGEventFlags::CGEventFlagAlphaShift;
+    }
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| "failed to create macOS event source for key event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)

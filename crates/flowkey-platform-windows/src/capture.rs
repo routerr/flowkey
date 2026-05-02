@@ -821,6 +821,48 @@ fn spawn_polling_keyboard_fallback(
             (0xDC, "BackSlash"),
             (0xDD, "RightBracket"),
             (0xDE, "Quote"),
+            // Locks / system keys
+            (0x14, "CapsLock"),
+            (0x90, "NumLock"),
+            (0x91, "ScrollLock"),
+            (0x2C, "PrintScreen"),
+            (0x13, "Pause"),
+            // Navigation cluster
+            (0x21, "PageUp"),
+            (0x22, "PageDown"),
+            (0x23, "End"),
+            (0x24, "Home"),
+            (0x2D, "Insert"),
+            (0x2E, "Delete"),
+            // Function keys
+            (0x70, "F1"),
+            (0x71, "F2"),
+            (0x72, "F3"),
+            (0x73, "F4"),
+            (0x74, "F5"),
+            (0x75, "F6"),
+            (0x76, "F7"),
+            (0x77, "F8"),
+            (0x78, "F9"),
+            (0x79, "F10"),
+            (0x7A, "F11"),
+            (0x7B, "F12"),
+            // Numpad
+            (0x60, "Numpad0"),
+            (0x61, "Numpad1"),
+            (0x62, "Numpad2"),
+            (0x63, "Numpad3"),
+            (0x64, "Numpad4"),
+            (0x65, "Numpad5"),
+            (0x66, "Numpad6"),
+            (0x67, "Numpad7"),
+            (0x68, "Numpad8"),
+            (0x69, "Numpad9"),
+            (0x6A, "NumpadMultiply"),
+            (0x6B, "NumpadAdd"),
+            (0x6D, "NumpadSubtract"),
+            (0x6E, "NumpadDecimal"),
+            (0x6F, "NumpadDivide"),
         ];
         let mut previous = [false; KEYS.len()];
         let mut tracker = HotkeyTracker::new(binding);
@@ -900,7 +942,7 @@ fn spawn_polling_keyboard_fallback(
                 }
             }
 
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(4));
         }
     });
 }
