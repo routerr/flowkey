@@ -126,10 +126,20 @@ if [ "$PLATFORM" == "macos" ]; then
 elif [ "$PLATFORM" == "windows" ]; then
     TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 
-    # On Windows, look for .exe
-    if [ -f "$TARGET_DIR/release/flowkey-gui.exe" ]; then
-        cp "$TARGET_DIR/release/flowkey-gui.exe" dist/flowkey.exe
+    # On Windows, Tauri emits the configured product binary. Keep the legacy
+    # flowkey-gui.exe fallback for older target directories.
+    WINDOWS_EXE=""
+    if [ -f "$TARGET_DIR/release/flowkey.exe" ]; then
+        WINDOWS_EXE="$TARGET_DIR/release/flowkey.exe"
+    elif [ -f "$TARGET_DIR/release/flowkey-gui.exe" ]; then
+        WINDOWS_EXE="$TARGET_DIR/release/flowkey-gui.exe"
+    fi
+
+    if [ -n "$WINDOWS_EXE" ]; then
+        cp "$WINDOWS_EXE" dist/flowkey.exe
         echo "Portable executable created: dist/flowkey.exe"
+    else
+        echo "Warning: portable executable not found under $TARGET_DIR/release"
     fi
 
     # Look for installer if generated

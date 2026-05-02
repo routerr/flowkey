@@ -115,8 +115,21 @@ impl HotkeyTracker {
                         self.latched = false;
                     }
                 }
+                return HotkeyOutcome::Suppressed;
             }
-            return HotkeyOutcome::Suppressed;
+
+            if self.binding.matches(event) {
+                if !self.latched {
+                    tracing::info!(target: "hotkey", "hotkey triggered: {:?}", self.binding.code);
+                    self.latched = true;
+                    self.suppress_remaining = self.binding.component_count();
+                    return HotkeyOutcome::Pressed;
+                }
+
+                return HotkeyOutcome::Suppressed;
+            }
+
+            return HotkeyOutcome::Forward;
         }
 
         match event {
@@ -133,7 +146,12 @@ impl HotkeyTracker {
                     return HotkeyOutcome::Pressed;
                 }
 
-                if code_matches || modifiers.shift || modifiers.control || modifiers.alt || modifiers.meta {
+                if code_matches
+                    || modifiers.shift
+                    || modifiers.control
+                    || modifiers.alt
+                    || modifiers.meta
+                {
                     tracing::debug!(
                         target: "hotkey",
                         code = %code,
@@ -321,6 +339,42 @@ mod tests {
         assert!(matches!(
             tracker.process(&release_shift),
             super::HotkeyOutcome::Suppressed
+        ));
+    }
+
+    #[test]
+    fn tracker_forwards_unrelated_keys_while_waiting_for_chord_releases() {
+        let binding = HotkeyBinding::parse("Ctrl+Alt+Shift+K").expect("binding should parse");
+        let mut tracker = HotkeyTracker::new(binding);
+
+        let press_hotkey = InputEvent::KeyDown {
+            code: "KeyK".to_string(),
+            modifiers: Modifiers {
+                shift: true,
+                control: true,
+                alt: true,
+                meta: false,
+            },
+            timestamp_us: 0,
+        };
+        let unrelated = InputEvent::KeyDown {
+            code: "Backspace".to_string(),
+            modifiers: Modifiers {
+                shift: false,
+                control: false,
+                alt: false,
+                meta: false,
+            },
+            timestamp_us: 1,
+        };
+
+        assert!(matches!(
+            tracker.process(&press_hotkey),
+            super::HotkeyOutcome::Pressed
+        ));
+        assert!(matches!(
+            tracker.process(&unrelated),
+            super::HotkeyOutcome::Forward
         ));
     }
 }
