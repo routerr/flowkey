@@ -16,7 +16,6 @@ extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> i32;
 }
 
-const MACOS_SYNTHETIC_KEYBOARD_EVENT_FLAG_BITS: u64 = 0x2000_0000;
 
 pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result<(), String> {
     let current = match sink.cursor_position {
@@ -179,6 +178,10 @@ pub(super) fn post_mouse_button(
 /// is running on the same process (the tap intercepts and re-routes
 /// events before they reach apps). Direct CGEvent posting at HID level
 /// is more reliable.
+///
+/// Modifier keys (Shift, Control, Alt, Meta) are posted as FlagsChanged
+/// events so that the CGEventTap's modifier state tracking stays accurate,
+/// ensuring loopback suppressor comparisons match correctly.
 pub(super) fn post_key_event(
     sink: &mut NativeInputSink,
     code: &str,
@@ -208,16 +211,43 @@ pub(super) fn post_key_event(
             .map_err(|error| error.to_string());
     };
 
+    // For modifier keys, build the flags that reflect the new state after
+    // this key event, then post a FlagsChanged CGEvent. This matches how
+    // macOS generates real modifier key events and keeps the CGEventTap's
+    // modifier tracking in sync with the injected state.
+    if let Some(modifier_flag) = modifier_flag_for_keycode(keycode) {
+        let mut flags = build_modifier_flags(&sink.current_modifiers);
+        if key_down {
+            flags |= modifier_flag;
+        } else {
+            flags &= !modifier_flag;
+        }
+        // FlagsChanged events use HIDSystemState, same as regular keys.
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| "failed to create macOS event source for modifier event".to_string())?;
+        let event = CGEvent::new_keyboard_event(source, keycode, key_down)
+            .map_err(|_| format!("failed to create macOS modifier event for {code}"))?;
+        event.set_flags(flags);
+        debug!(
+            target: "keyboard_trace",
+            platform = sink.platform,
+            code = %code,
+            macos_keycode = keycode,
+            pressed = key_down,
+            "posting macOS modifier FlagsChanged CGEvent"
+        );
+        event.post(CGEventTapLocation::HID);
+        return Ok(());
+    }
+
     let flags = build_modifier_flags(&sink.current_modifiers);
-    // Match Enigo's proven keyboard event shape: session-derived source state,
-    // HID posting location, and the synthetic keyboard flag present on events
-    // macOS accepts reliably. Mouse injection intentionally keeps HIDSystemState.
-    //
+    // Use HIDSystemState as the event source. This is the same source used
+    // by real hardware events and is accepted reliably by all macOS subsystems.
     // The HID-level event tap will see the injected event, but the loopback
     // suppressor filters it out (via matches_ignoring_timestamp). Even if
     // loopback matching fails, the tap passes the event through because
     // suppress_active is false when this machine is being controlled.
-    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| "failed to create macOS event source for key event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)
         .map_err(|_| format!("failed to create macOS keyboard event for {code}"))?;
@@ -238,10 +268,19 @@ pub(super) fn post_key_event(
     Ok(())
 }
 
+/// Returns the CGEventFlags bit for modifier keys, or None for regular keys.
+fn modifier_flag_for_keycode(keycode: CGKeyCode) -> Option<CGEventFlags> {
+    match keycode {
+        0x38 | 0x3C => Some(CGEventFlags::CGEventFlagShift),    // ShiftLeft / ShiftRight
+        0x3B | 0x3E => Some(CGEventFlags::CGEventFlagControl),  // ControlLeft / ControlRight
+        0x3A | 0x3D => Some(CGEventFlags::CGEventFlagAlternate),// AltLeft / AltRight
+        0x37 | 0x36 => Some(CGEventFlags::CGEventFlagCommand),  // MetaLeft / MetaRight
+        _ => None,
+    }
+}
+
 fn build_modifier_flags(modifiers: &super::super::event::Modifiers) -> CGEventFlags {
-    // Start with flags present on accepted synthetic macOS keyboard events.
-    let mut flags = CGEventFlags::CGEventFlagNonCoalesced
-        | CGEventFlags::from_bits_retain(MACOS_SYNTHETIC_KEYBOARD_EVENT_FLAG_BITS);
+    let mut flags = CGEventFlags::CGEventFlagNonCoalesced;
     if modifiers.shift {
         flags |= CGEventFlags::CGEventFlagShift;
     }
@@ -508,8 +547,7 @@ impl NativeInputSink {
 mod tests {
     use super::{
         build_modifier_flags, dock_cursor_zone, dock_proxy_transition, key_code_to_macos_virtual,
-        macos_posted_delta, DockCursorZone, DockProxyAction,
-        MACOS_SYNTHETIC_KEYBOARD_EVENT_FLAG_BITS,
+        macos_posted_delta, modifier_flag_for_keycode, DockCursorZone, DockProxyAction,
     };
     use crate::event::Modifiers;
     use core_graphics::event::CGEventFlags;
@@ -526,15 +564,27 @@ mod tests {
     }
 
     #[test]
-    fn modifier_flags_with_no_modifiers_use_synthetic_keyboard_shape() {
+    fn modifier_flags_with_no_modifiers_only_has_non_coalesced() {
         let flags = build_modifier_flags(&Modifiers::none());
-        assert!(flags.contains(CGEventFlags::CGEventFlagNonCoalesced));
-        assert!(
-            flags.contains(CGEventFlags::from_bits_retain(
-                MACOS_SYNTHETIC_KEYBOARD_EVENT_FLAG_BITS
-            )),
-            "macOS keyboard CGEvents should include the accepted synthetic keyboard flag"
-        );
+        assert_eq!(flags, CGEventFlags::CGEventFlagNonCoalesced);
+    }
+
+    #[test]
+    fn modifier_flag_for_keycode_identifies_modifier_keys() {
+        // Shift
+        assert!(modifier_flag_for_keycode(0x38).is_some());
+        assert!(modifier_flag_for_keycode(0x3C).is_some());
+        // Control
+        assert!(modifier_flag_for_keycode(0x3B).is_some());
+        assert!(modifier_flag_for_keycode(0x3E).is_some());
+        // Alt/Option
+        assert!(modifier_flag_for_keycode(0x3A).is_some());
+        assert!(modifier_flag_for_keycode(0x3D).is_some());
+        // Command/Meta
+        assert!(modifier_flag_for_keycode(0x37).is_some());
+        assert!(modifier_flag_for_keycode(0x36).is_some());
+        // Regular key (KeyA = 0x00)
+        assert!(modifier_flag_for_keycode(0x00).is_none());
     }
 
     #[test]
