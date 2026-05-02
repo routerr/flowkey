@@ -5,9 +5,12 @@ import {
   type DiscoveredPeer,
   type Config,
   type DaemonStatus,
+  type InputDebugEvent,
   type PermissionStatus,
 } from './types'
 import './App.css'
+
+const CONTROL_RELEASE_GUARD_MS = 2000
 
 function App() {
   const [config, setConfig] = useState<Config | null>(null)
@@ -19,8 +22,10 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [disconnectNotif, setDisconnectNotif] = useState<string | null>(null)
   const [isPairing, setIsPairing] = useState(false)
+  const [inputDebugEvents, setInputDebugEvents] = useState<InputDebugEvent[]>([])
   const prevStateRef = useRef<string | null>(null)
   const userReleasedRef = useRef(false)
+  const controlStartedAtRef = useRef<number | null>(null)
 
   // Load config on mount
   useEffect(() => {
@@ -45,6 +50,45 @@ function App() {
       unlisten.then(fn => fn())
     }
   }, [])
+
+  useEffect(() => {
+    const unlisten = event.listen<InputDebugEvent>('input-debug-event', (e) => {
+      setInputDebugEvents((events) => [...events, e.payload].slice(-80))
+    })
+    return () => {
+      unlisten.then(fn => fn())
+    }
+  }, [])
+
+  // While controlling a remote peer, swallow keyboard events at the window
+  // level so that focused UI elements (notably the "Release Control" button)
+  // cannot be re-activated by Enter/Space when the platform-level capture
+  // hook fails to suppress local key delivery (observed on some Windows
+  // setups where WH_KEYBOARD_LL is dropped and only the rdev/polling
+  // fallbacks deliver events to the daemon).
+  useEffect(() => {
+    if (status?.state !== 'controlling') return
+
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+
+    const swallow = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+    }
+
+    window.addEventListener('keydown', swallow, { capture: true })
+    window.addEventListener('keyup', swallow, { capture: true })
+    window.addEventListener('keypress', swallow, { capture: true })
+
+    return () => {
+      window.removeEventListener('keydown', swallow, { capture: true })
+      window.removeEventListener('keyup', swallow, { capture: true })
+      window.removeEventListener('keypress', swallow, { capture: true })
+    }
+  }, [status?.state])
 
   // Poll for discovery
   useEffect(() => {
@@ -156,15 +200,26 @@ function App() {
     setError(null)
     try {
       await invoke('switch_to_peer', { peerId })
+      controlStartedAtRef.current = Date.now()
     } catch (e) {
       setError(String(e))
     }
   }
 
   async function releaseControl() {
+    if (
+      status?.state === 'controlling' &&
+      controlStartedAtRef.current !== null &&
+      Date.now() - controlStartedAtRef.current < CONTROL_RELEASE_GUARD_MS
+    ) {
+      setError('Control just started. Try releasing again after a moment.')
+      return
+    }
+
     userReleasedRef.current = true
     try {
       await invoke('release_control')
+      controlStartedAtRef.current = null
     } catch (e) {
       userReleasedRef.current = false
       setError(String(e))
@@ -354,6 +409,25 @@ function App() {
                       <div key={i} className="note-item">• {note}</div>
                     ))}
                   </div>
+                </div>
+              </section>
+
+              <section className="diagnostics-section">
+                <div className="section-header">
+                  <h2>Input Debug</h2>
+                  <button onClick={() => setInputDebugEvents([])} className="btn-small">Clear</button>
+                </div>
+                <div className="debug-feed">
+                  {inputDebugEvents.length === 0 ? (
+                    <div className="empty">No keyboard debug events seen in this GUI session.</div>
+                  ) : (
+                    inputDebugEvents.map((item, i) => (
+                      <div key={`${item.timestamp_ms}-${i}`} className="debug-line">
+                        <span className="debug-kind">{item.kind}</span>
+                        <span className="debug-detail">{item.detail}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </section>
 

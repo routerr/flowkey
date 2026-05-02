@@ -1556,6 +1556,7 @@ version = "0.1.0"
 dependencies = [
  "flowkey-input",
  "rdev",
+ "serde",
  "tokio",
  "tracing",
  "windows-sys 0.61.2",

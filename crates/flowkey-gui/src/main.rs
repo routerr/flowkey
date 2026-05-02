@@ -7,13 +7,13 @@ use flowkey_config::Config;
 use flowkey_daemon::{spawn_supervised, DaemonHandle};
 use flowkey_net::discovery::{DiscoveredPeer, DiscoveryAdvertisement};
 use flowkey_net::pairing::{initiate_pairing_client, run_pairing_listener, PairingProposal};
-use serde::Serialize;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 #[cfg(target_os = "macos")]
 use flowkey_platform_macos::control_ipc::connect_to_control_socket;
 #[cfg(target_os = "windows")]
 use flowkey_platform_windows::control_ipc::connect_to_control_pipe;
+use serde::Serialize;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{
     CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
     SystemTrayMenuItem, WindowEvent,
@@ -189,17 +189,17 @@ async fn switch_to_peer(peer_id: String) -> Result<(), String> {
         let control_path = Config::control_path().map_err(|e| e.to_string())?;
         let socket_path = control_path.with_extension("sock");
         if let Some(mut stream) = connect_to_control_socket(&socket_path).await {
-            cmd.send_to(&mut stream)
-                .await
-                .map_err(|e| {
-                    tracing::error!(%e, "gui: failed to write switch command");
-                    format!("failed to send command to daemon: {e}")
-                })?;
+            cmd.send_to(&mut stream).await.map_err(|e| {
+                tracing::error!(%e, "gui: failed to write switch command");
+                format!("failed to send command to daemon: {e}")
+            })?;
             tracing::info!(peer_id = %peer_id, "gui: switch command written to socket");
             return Ok(());
         } else {
             tracing::warn!(path = %socket_path.display(), "gui: daemon control socket missing");
-            return Err("daemon control socket not found; daemon may still be starting".to_string());
+            return Err(
+                "daemon control socket not found; daemon may still be starting".to_string(),
+            );
         }
     }
 
@@ -234,17 +234,17 @@ async fn release_control() -> Result<(), String> {
         let control_path = Config::control_path().map_err(|e| e.to_string())?;
         let socket_path = control_path.with_extension("sock");
         if let Some(mut stream) = connect_to_control_socket(&socket_path).await {
-            cmd.send_to(&mut stream)
-                .await
-                .map_err(|e| {
-                    tracing::error!(%e, "gui: failed to write release command");
-                    format!("failed to send command to daemon: {e}")
-                })?;
+            cmd.send_to(&mut stream).await.map_err(|e| {
+                tracing::error!(%e, "gui: failed to write release command");
+                format!("failed to send command to daemon: {e}")
+            })?;
             tracing::info!("gui: release command written to socket");
             return Ok(());
         } else {
             tracing::warn!(path = %socket_path.display(), "gui: daemon control socket missing");
-            return Err("daemon control socket not found; daemon may still be starting".to_string());
+            return Err(
+                "daemon control socket not found; daemon may still be starting".to_string(),
+            );
         }
     }
 
@@ -297,8 +297,11 @@ fn init_tracing() {
     }
 
     let file_appender = tracing_appender::rolling::never(&log_dir, "flowkey.log");
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,flowkey_daemon=debug,flowkey_net=debug,keyboard_trace=trace"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "debug,flowkey_daemon=debug,flowkey_net=debug,flowkey_platform_windows=trace,flowkey_platform_macos=debug,keyboard_trace=trace",
+        )
+    });
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -376,6 +379,14 @@ fn main() {
         })
         .setup(|app| {
             let app_handle = app.handle();
+            #[cfg(target_os = "windows")]
+            {
+                let debug_handle = app_handle.clone();
+                flowkey_platform_windows::debug::set_debug_sink(move |event| {
+                    let _ = debug_handle.emit_all("input-debug-event", event);
+                });
+            }
+
             tauri::async_runtime::spawn(async move {
                 if let Ok(config) = Config::load_or_create() {
                     let handle = Arc::new(spawn_supervised(config));

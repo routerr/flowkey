@@ -8,4 +8,3 @@ pub use tokio::net::windows::named_pipe::NamedPipeClient as ControlStream;
 pub async fn connect_to_control_pipe(pipe_name: &str) -> Option<NamedPipeClient> {
     ClientOptions::new().open(pipe_name).ok()
 }
-

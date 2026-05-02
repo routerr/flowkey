@@ -2,9 +2,9 @@ use std::collections::HashSet;
 #[cfg(target_os = "macos")]
 use std::time::Instant;
 
-use enigo::{Axis, Button, Direction, Enigo, Key, Mouse, Settings};
 #[cfg(not(target_os = "macos"))]
 use enigo::Keyboard;
+use enigo::{Axis, Button, Direction, Enigo, Key, Mouse, Settings};
 #[cfg(target_os = "macos")]
 use tracing::debug;
 #[cfg(not(target_os = "macos"))]

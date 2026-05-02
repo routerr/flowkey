@@ -16,7 +16,6 @@ extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> i32;
 }
 
-
 pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result<(), String> {
     let current = match sink.cursor_position {
         Some(pos) => pos,
@@ -231,13 +230,9 @@ pub(super) fn post_key_event(
             code = %code,
             macos_keycode = keycode,
             pressed = key_down,
-            "posting macOS modifier key CGEvent at Session level"
+            "posting macOS modifier key CGEvent at HID level"
         );
-        // Post at Session level (kCGSessionEventTap) — the same level enigo uses.
-        // HID-level posting requires Input Monitoring in addition to Accessibility;
-        // Session-level posting requires only Accessibility, and is sufficient for
-        // injecting into the foreground application.
-        event.post(CGEventTapLocation::Session);
+        event.post(CGEventTapLocation::HID);
         return Ok(());
     }
 
@@ -257,26 +252,22 @@ pub(super) fn post_key_event(
         control = sink.current_modifiers.control,
         alt = sink.current_modifiers.alt,
         meta = sink.current_modifiers.meta,
-        "posting macOS keyboard CGEvent at Session level"
+        "posting macOS keyboard CGEvent at HID level"
     );
-    // Post at Session level (kCGSessionEventTap). This matches the approach
-    // used by enigo (the reference implementation that worked at commit 21c0137).
-    // HID-level keyboard injection on macOS 14+ requires Input Monitoring on top
-    // of Accessibility, whereas Session-level injection requires only Accessibility.
-    // The HID-level event tap installed by MacosCapture will not see Session-level
-    // events, which is fine: when Mac is being controlled, the hotkey watcher drops
-    // all captured Mac keyboard events (daemon is not in Controlling state).
-    event.post(CGEventTapLocation::Session);
+    // HID-level posting matches the mouse path and re-enters the same input
+    // pipeline as physical keys. The loopback suppressor prevents the local
+    // capture tap from forwarding our injected keys back to the controller.
+    event.post(CGEventTapLocation::HID);
     Ok(())
 }
 
 /// Returns the CGEventFlags bit for modifier keys, or None for regular keys.
 fn modifier_flag_for_keycode(keycode: CGKeyCode) -> Option<CGEventFlags> {
     match keycode {
-        0x38 | 0x3C => Some(CGEventFlags::CGEventFlagShift),    // ShiftLeft / ShiftRight
-        0x3B | 0x3E => Some(CGEventFlags::CGEventFlagControl),  // ControlLeft / ControlRight
-        0x3A | 0x3D => Some(CGEventFlags::CGEventFlagAlternate),// AltLeft / AltRight
-        0x37 | 0x36 => Some(CGEventFlags::CGEventFlagCommand),  // MetaLeft / MetaRight
+        0x38 | 0x3C => Some(CGEventFlags::CGEventFlagShift), // ShiftLeft / ShiftRight
+        0x3B | 0x3E => Some(CGEventFlags::CGEventFlagControl), // ControlLeft / ControlRight
+        0x3A | 0x3D => Some(CGEventFlags::CGEventFlagAlternate), // AltLeft / AltRight
+        0x37 | 0x36 => Some(CGEventFlags::CGEventFlagCommand), // MetaLeft / MetaRight
         _ => None,
     }
 }
@@ -660,9 +651,9 @@ mod tests {
     #[test]
     fn all_letter_keys_map_to_distinct_virtual_keycodes() {
         let letters = [
-            "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI", "KeyJ",
-            "KeyK", "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT",
-            "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ",
+            "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI", "KeyJ", "KeyK",
+            "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT", "KeyU", "KeyV",
+            "KeyW", "KeyX", "KeyY", "KeyZ",
         ];
         let mut seen = std::collections::HashSet::new();
         for letter in &letters {
@@ -821,29 +812,113 @@ mod tests {
         // normalize.rs for all standard keyboard keys.
         let windows_codes = [
             // Letters
-            "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI", "KeyJ",
-            "KeyK", "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT",
-            "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ",
+            "KeyA",
+            "KeyB",
+            "KeyC",
+            "KeyD",
+            "KeyE",
+            "KeyF",
+            "KeyG",
+            "KeyH",
+            "KeyI",
+            "KeyJ",
+            "KeyK",
+            "KeyL",
+            "KeyM",
+            "KeyN",
+            "KeyO",
+            "KeyP",
+            "KeyQ",
+            "KeyR",
+            "KeyS",
+            "KeyT",
+            "KeyU",
+            "KeyV",
+            "KeyW",
+            "KeyX",
+            "KeyY",
+            "KeyZ",
             // Digits
-            "Digit0", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7",
-            "Digit8", "Digit9",
+            "Digit0",
+            "Digit1",
+            "Digit2",
+            "Digit3",
+            "Digit4",
+            "Digit5",
+            "Digit6",
+            "Digit7",
+            "Digit8",
+            "Digit9",
             // Modifiers
-            "ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight", "AltLeft", "AltRight",
-            "MetaLeft", "MetaRight",
+            "ShiftLeft",
+            "ShiftRight",
+            "ControlLeft",
+            "ControlRight",
+            "AltLeft",
+            "AltRight",
+            "MetaLeft",
+            "MetaRight",
             // Navigation
-            "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Home",
+            "End",
+            "PageUp",
             "PageDown",
             // Editing
-            "Enter", "Tab", "Space", "Backspace", "Delete", "Escape", "CapsLock",
+            "Enter",
+            "Tab",
+            "Space",
+            "Backspace",
+            "Delete",
+            "Escape",
+            "CapsLock",
             // Punctuation
-            "Minus", "Equal", "BracketLeft", "BracketRight", "Backslash", "Semicolon", "Quote",
-            "Backquote", "Comma", "Period", "Slash",
+            "Minus",
+            "Equal",
+            "BracketLeft",
+            "BracketRight",
+            "Backslash",
+            "Semicolon",
+            "Quote",
+            "Backquote",
+            "Comma",
+            "Period",
+            "Slash",
             // Function keys
-            "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+            "F1",
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6",
+            "F7",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
             // Numpad
-            "Numpad0", "Numpad1", "Numpad2", "Numpad3", "Numpad4", "Numpad5", "Numpad6",
-            "Numpad7", "Numpad8", "Numpad9", "NumpadAdd", "NumpadSubtract", "NumpadMultiply",
-            "NumpadDivide", "NumpadDecimal", "NumpadEnter", "NumpadEqual", "NumLock",
+            "Numpad0",
+            "Numpad1",
+            "Numpad2",
+            "Numpad3",
+            "Numpad4",
+            "Numpad5",
+            "Numpad6",
+            "Numpad7",
+            "Numpad8",
+            "Numpad9",
+            "NumpadAdd",
+            "NumpadSubtract",
+            "NumpadMultiply",
+            "NumpadDivide",
+            "NumpadDecimal",
+            "NumpadEnter",
+            "NumpadEqual",
+            "NumLock",
         ];
 
         let mut unmapped = Vec::new();

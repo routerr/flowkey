@@ -49,3 +49,10 @@ export interface DaemonStatus {
   notes: string[];
   connected_peer_ids: string[];
 }
+
+export interface InputDebugEvent {
+  source: string;
+  kind: string;
+  detail: string;
+  timestamp_ms: number;
+}

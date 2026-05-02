@@ -1,7 +1,7 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver};
 use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -18,11 +18,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RWIN,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, SetWindowsHookExW,
-    UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT, MSG,
-    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, HHOOK,
+    KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
@@ -107,10 +106,24 @@ impl InputCapture for WindowsExclusiveCapture {
         let loopback = self.loopback.clone();
         let suppression_enabled = Arc::clone(&self.suppression_enabled);
         let restart_count = Arc::clone(&self.restart_count);
+        let native_keyboard_events = Arc::new(AtomicU64::new(0));
         self.receiver = Some(receiver);
         self.started = true;
 
         thread::spawn(move || {
+            spawn_rdev_keyboard_fallback(
+                binding.clone(),
+                loopback.clone(),
+                sender.clone(),
+                Arc::clone(&native_keyboard_events),
+            );
+            spawn_polling_keyboard_fallback(
+                binding.clone(),
+                loopback.clone(),
+                sender.clone(),
+                Arc::clone(&native_keyboard_events),
+            );
+
             let backoff = [
                 Duration::from_secs(1),
                 Duration::from_secs(2),
@@ -125,6 +138,7 @@ impl InputCapture for WindowsExclusiveCapture {
                     loopback.clone(),
                     Arc::clone(&suppression_enabled),
                     sender.clone(),
+                    Arc::clone(&native_keyboard_events),
                 )
                 .join();
 
@@ -185,8 +199,12 @@ use std::sync::atomic::AtomicIsize;
 static NATIVE_KEYBOARD_HOOK: AtomicIsize = AtomicIsize::new(0);
 static NATIVE_MOUSE_HOOK: AtomicIsize = AtomicIsize::new(0);
 
-fn hook_to_isize(h: HHOOK) -> isize { h as isize }
-fn isize_to_hook(v: isize) -> HHOOK { v as *mut c_void }
+fn hook_to_isize(h: HHOOK) -> isize {
+    h as isize
+}
+fn isize_to_hook(v: isize) -> HHOOK {
+    v as *mut c_void
+}
 
 struct NativeGrabState {
     tracker: HotkeyTracker,
@@ -195,6 +213,7 @@ struct NativeGrabState {
     suppression_enabled: Arc<AtomicBool>,
     sender: mpsc::Sender<CaptureSignal>,
     pending_recenter: Option<(f64, f64)>,
+    native_keyboard_events: Arc<AtomicU64>,
 }
 
 thread_local! {
@@ -209,9 +228,9 @@ unsafe extern "system" fn native_keyboard_proc(
     if code == HC_ACTION as i32 {
         let suppress = GRAB_STATE
             .try_with(|cell| {
-                cell.try_borrow_mut()
-                    .ok()
-                    .and_then(|mut guard| guard.as_mut().map(|s| handle_keyboard(s, wparam, lparam)))
+                cell.try_borrow_mut().ok().and_then(|mut guard| {
+                    guard.as_mut().map(|s| handle_keyboard(s, wparam, lparam))
+                })
             })
             .ok()
             .flatten()
@@ -224,11 +243,7 @@ unsafe extern "system" fn native_keyboard_proc(
     CallNextHookEx(hook, code, wparam, lparam)
 }
 
-unsafe extern "system" fn native_mouse_proc(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn native_mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let suppress = GRAB_STATE
             .try_with(|cell| {
@@ -249,16 +264,14 @@ unsafe extern "system" fn native_mouse_proc(
 
 fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) -> bool {
     let msg_id = wparam as u32;
-    if !matches!(
-        msg_id,
-        WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP
-    ) {
+    if !matches!(msg_id, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP) {
         return false;
     }
 
     let pressed = matches!(msg_id, WM_KEYDOWN | WM_SYSKEYDOWN);
     let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
     let vk = kb.vkCode as u16;
+    state.native_keyboard_events.fetch_add(1, Ordering::SeqCst);
 
     let rdev_key = rdev_key_from_vk(vk);
 
@@ -273,10 +286,19 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
         pressed,
         "raw keyboard callback received"
     );
+    crate::debug::emit(
+        "raw-keyboard",
+        format!(
+            "vk={vk} scan={} flags={} pressed={pressed} mapped={rdev_key:?}",
+            kb.scanCode, kb.flags
+        ),
+    );
     let timestamp_us = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_micros() as u64;
+
+    sync_current_modifier_state(&mut state.capture_state);
 
     let input_event = state
         .capture_state
@@ -291,6 +313,10 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
             pressed,
             "keyboard event has no protocol mapping, passing through"
         );
+        crate::debug::emit(
+            "keyboard-unmapped",
+            format!("vk={vk} pressed={pressed}; passing through locally"),
+        );
         return false;
     };
 
@@ -298,6 +324,7 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
     if let Some(loopback) = &state.loopback {
         if let Ok(mut lb) = loopback.lock() {
             if lb.should_suppress(&input) {
+                crate::debug::emit("keyboard-loopback", format!("{input:?}"));
                 return false; // pass through; injection will take effect
             }
         }
@@ -308,9 +335,11 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
     match state.tracker.process(&input) {
         flowkey_input::hotkey::HotkeyOutcome::Pressed => {
             let _ = state.sender.send(CaptureSignal::HotkeyPressed);
+            crate::debug::emit("hotkey-pressed", format!("{input:?}"));
             return true; // suppress hotkey activation to prevent leakage to foreground app
         }
         flowkey_input::hotkey::HotkeyOutcome::Suppressed => {
+            crate::debug::emit("hotkey-suppressed", format!("{input:?}"));
             return true; // suppress chord release sequence
         }
         flowkey_input::hotkey::HotkeyOutcome::Forward => {}
@@ -340,10 +369,37 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
             suppress_local,
             "forwarding keyboard event from Windows capture"
         );
+        crate::debug::emit(
+            "keyboard-forward",
+            format!("{input:?}; suppress_local={suppress_local}"),
+        );
     }
 
     let _ = state.sender.send(CaptureSignal::Input(input));
     suppress_local
+}
+
+fn sync_current_modifier_state(capture_state: &mut CaptureState) {
+    let (shift_l, shift_r, ctrl_l, ctrl_r, alt_l, alt_r, meta_l, meta_r) = unsafe {
+        (
+            key_is_down(VK_LSHIFT),
+            key_is_down(VK_RSHIFT),
+            key_is_down(VK_LCONTROL),
+            key_is_down(VK_RCONTROL),
+            key_is_down(VK_LMENU),
+            key_is_down(VK_RMENU),
+            key_is_down(VK_LWIN),
+            key_is_down(VK_RWIN),
+        )
+    };
+
+    capture_state.sync_physical_modifiers(
+        shift_l, shift_r, ctrl_l, ctrl_r, alt_l, alt_r, meta_l, meta_r,
+    );
+}
+
+unsafe fn key_is_down(vk: u16) -> bool {
+    GetAsyncKeyState(vk as i32) as u16 & 0x8000 != 0
 }
 
 fn handle_mouse(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) -> bool {
@@ -599,13 +655,13 @@ fn spawn_grab_thread(
     loopback: Option<SharedLoopbackSuppressor>,
     suppression_enabled: Arc<AtomicBool>,
     sender: mpsc::Sender<CaptureSignal>,
+    native_keyboard_events: Arc<AtomicU64>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let hmod = unsafe { GetModuleHandleW(null_mut()) };
 
-        let kb_hook: HHOOK = unsafe {
-            SetWindowsHookExW(WH_KEYBOARD_LL, Some(native_keyboard_proc), hmod, 0)
-        };
+        let kb_hook: HHOOK =
+            unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(native_keyboard_proc), hmod, 0) };
         if kb_hook.is_null() {
             let err = unsafe { GetLastError() };
             warn!(error_code = err, "failed to install WH_KEYBOARD_LL hook");
@@ -614,9 +670,8 @@ fn spawn_grab_thread(
         NATIVE_KEYBOARD_HOOK.store(hook_to_isize(kb_hook), Ordering::SeqCst);
         info!("WH_KEYBOARD_LL hook installed");
 
-        let ms_hook: HHOOK = unsafe {
-            SetWindowsHookExW(WH_MOUSE_LL, Some(native_mouse_proc), hmod, 0)
-        };
+        let ms_hook: HHOOK =
+            unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(native_mouse_proc), hmod, 0) };
         if ms_hook.is_null() {
             let err = unsafe { GetLastError() };
             warn!(error_code = err, "failed to install WH_MOUSE_LL hook");
@@ -641,14 +696,14 @@ fn spawn_grab_thread(
             let meta_r;
 
             unsafe {
-                shift_l = GetAsyncKeyState(VK_LSHIFT as i32) as u16 & 0x8000 != 0;
-                shift_r = GetAsyncKeyState(VK_RSHIFT as i32) as u16 & 0x8000 != 0;
-                ctrl_l = GetAsyncKeyState(VK_LCONTROL as i32) as u16 & 0x8000 != 0;
-                ctrl_r = GetAsyncKeyState(VK_RCONTROL as i32) as u16 & 0x8000 != 0;
-                alt_l = GetAsyncKeyState(VK_LMENU as i32) as u16 & 0x8000 != 0;
-                alt_r = GetAsyncKeyState(VK_RMENU as i32) as u16 & 0x8000 != 0;
-                meta_l = GetAsyncKeyState(VK_LWIN as i32) as u16 & 0x8000 != 0;
-                meta_r = GetAsyncKeyState(VK_RWIN as i32) as u16 & 0x8000 != 0;
+                shift_l = key_is_down(VK_LSHIFT);
+                shift_r = key_is_down(VK_RSHIFT);
+                ctrl_l = key_is_down(VK_LCONTROL);
+                ctrl_r = key_is_down(VK_RCONTROL);
+                alt_l = key_is_down(VK_LMENU);
+                alt_r = key_is_down(VK_RMENU);
+                meta_l = key_is_down(VK_LWIN);
+                meta_r = key_is_down(VK_RWIN);
             }
             capture_state.sync_physical_modifiers(
                 shift_l, shift_r, ctrl_l, ctrl_r, alt_l, alt_r, meta_l, meta_r,
@@ -661,6 +716,7 @@ fn spawn_grab_thread(
                 suppression_enabled,
                 sender,
                 pending_recenter: None,
+                native_keyboard_events,
             });
         });
 
@@ -691,6 +747,210 @@ fn spawn_grab_thread(
         NATIVE_KEYBOARD_HOOK.store(0, Ordering::SeqCst);
         NATIVE_MOUSE_HOOK.store(0, Ordering::SeqCst);
     })
+}
+
+fn spawn_polling_keyboard_fallback(
+    binding: HotkeyBinding,
+    loopback: Option<SharedLoopbackSuppressor>,
+    sender: mpsc::Sender<CaptureSignal>,
+    native_keyboard_events: Arc<AtomicU64>,
+) {
+    thread::spawn(move || {
+        const KEYS: &[(u16, &str)] = &[
+            (VK_LSHIFT, "ShiftLeft"),
+            (VK_RSHIFT, "ShiftRight"),
+            (VK_LCONTROL, "ControlLeft"),
+            (VK_RCONTROL, "ControlRight"),
+            (VK_LMENU, "AltLeft"),
+            (VK_RMENU, "AltRight"),
+            (VK_LWIN, "MetaLeft"),
+            (VK_RWIN, "MetaRight"),
+            (0x08, "Backspace"),
+            (0x09, "Tab"),
+            (0x0D, "Enter"),
+            (0x1B, "Escape"),
+            (0x20, "Space"),
+            (0x25, "ArrowLeft"),
+            (0x26, "ArrowUp"),
+            (0x27, "ArrowRight"),
+            (0x28, "ArrowDown"),
+            (0x30, "Digit0"),
+            (0x31, "Digit1"),
+            (0x32, "Digit2"),
+            (0x33, "Digit3"),
+            (0x34, "Digit4"),
+            (0x35, "Digit5"),
+            (0x36, "Digit6"),
+            (0x37, "Digit7"),
+            (0x38, "Digit8"),
+            (0x39, "Digit9"),
+            (0x41, "KeyA"),
+            (0x42, "KeyB"),
+            (0x43, "KeyC"),
+            (0x44, "KeyD"),
+            (0x45, "KeyE"),
+            (0x46, "KeyF"),
+            (0x47, "KeyG"),
+            (0x48, "KeyH"),
+            (0x49, "KeyI"),
+            (0x4A, "KeyJ"),
+            (0x4B, "KeyK"),
+            (0x4C, "KeyL"),
+            (0x4D, "KeyM"),
+            (0x4E, "KeyN"),
+            (0x4F, "KeyO"),
+            (0x50, "KeyP"),
+            (0x51, "KeyQ"),
+            (0x52, "KeyR"),
+            (0x53, "KeyS"),
+            (0x54, "KeyT"),
+            (0x55, "KeyU"),
+            (0x56, "KeyV"),
+            (0x57, "KeyW"),
+            (0x58, "KeyX"),
+            (0x59, "KeyY"),
+            (0x5A, "KeyZ"),
+            (0xBA, "Semicolon"),
+            (0xBB, "Equal"),
+            (0xBC, "Comma"),
+            (0xBD, "Minus"),
+            (0xBE, "Dot"),
+            (0xBF, "Slash"),
+            (0xC0, "BackQuote"),
+            (0xDB, "LeftBracket"),
+            (0xDC, "BackSlash"),
+            (0xDD, "RightBracket"),
+            (0xDE, "Quote"),
+        ];
+        let mut previous = [false; KEYS.len()];
+        let mut tracker = HotkeyTracker::new(binding);
+        let mut capture_state = CaptureState::default();
+
+        info!("Windows GetAsyncKeyState keyboard fallback starting");
+        loop {
+            if native_keyboard_events.load(Ordering::SeqCst) > 0 {
+                thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+
+            for (index, (vk, label)) in KEYS.iter().enumerate() {
+                let pressed = unsafe { key_is_down(*vk) };
+                if pressed != previous[index] {
+                    previous[index] = pressed;
+                    crate::debug::emit("key-state-probe", format!("{label} pressed={pressed}"));
+                    debug!(
+                        target: "keyboard_trace",
+                        platform = "windows",
+                        vk_code = *vk,
+                        key = *label,
+                        pressed,
+                        "GetAsyncKeyState keyboard probe changed"
+                    );
+
+                    sync_current_modifier_state(&mut capture_state);
+                    let timestamp_us = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros() as u64;
+                    let rdev_key = rdev_key_from_vk(*vk);
+
+                    let Some(input) =
+                        capture_state.translate_key_event(rdev_key, pressed, timestamp_us)
+                    else {
+                        crate::debug::emit(
+                            "poll-keyboard-unmapped",
+                            format!("{label} vk={vk} pressed={pressed}"),
+                        );
+                        continue;
+                    };
+
+                    if let Some(loopback) = &loopback {
+                        if let Ok(mut lb) = loopback.lock() {
+                            if lb.should_suppress(&input) {
+                                crate::debug::emit("poll-keyboard-loopback", format!("{input:?}"));
+                                continue;
+                            }
+                        }
+                    }
+
+                    match tracker.process(&input) {
+                        flowkey_input::hotkey::HotkeyOutcome::Pressed => {
+                            crate::debug::emit("poll-hotkey-pressed", format!("{input:?}"));
+                            let _ = sender.send(CaptureSignal::HotkeyPressed);
+                            continue;
+                        }
+                        flowkey_input::hotkey::HotkeyOutcome::Suppressed => {
+                            crate::debug::emit("poll-hotkey-suppressed", format!("{input:?}"));
+                            continue;
+                        }
+                        flowkey_input::hotkey::HotkeyOutcome::Forward => {}
+                    }
+
+                    crate::debug::emit("poll-keyboard-forward", format!("{input:?}"));
+                    debug!(
+                        target: "keyboard_trace",
+                        platform = "windows",
+                        vk_code = *vk,
+                        key = *label,
+                        pressed,
+                        input = ?input,
+                        "forwarding keyboard event from Windows polling fallback"
+                    );
+                    let _ = sender.send(CaptureSignal::Input(input));
+                }
+            }
+
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
+}
+
+fn spawn_rdev_keyboard_fallback(
+    binding: HotkeyBinding,
+    loopback: Option<SharedLoopbackSuppressor>,
+    sender: mpsc::Sender<CaptureSignal>,
+    native_keyboard_events: Arc<AtomicU64>,
+) {
+    thread::spawn(move || {
+        let mut tracker = HotkeyTracker::new(binding);
+        let mut capture_state = CaptureState::default();
+
+        info!("Windows rdev keyboard fallback listener starting");
+        let result = rdev::listen(move |event| {
+            let is_keyboard = matches!(
+                event.event_type,
+                rdev::EventType::KeyPress(_) | rdev::EventType::KeyRelease(_)
+            );
+            if !is_keyboard {
+                return;
+            }
+
+            if native_keyboard_events.load(Ordering::SeqCst) > 0 {
+                return;
+            }
+
+            crate::debug::emit("rdev-keyboard-raw", format!("{:?}", event.event_type));
+
+            if let Some(signal) = capture_state.translate(event, &mut tracker, loopback.as_ref()) {
+                match &signal {
+                    CaptureSignal::Input(input) => {
+                        crate::debug::emit("rdev-keyboard-forward", format!("{input:?}"));
+                    }
+                    CaptureSignal::HotkeyPressed => {
+                        crate::debug::emit("rdev-hotkey-pressed", "fallback hotkey pressed");
+                    }
+                    CaptureSignal::HotkeySuppressed => {
+                        crate::debug::emit("rdev-hotkey-suppressed", "fallback hotkey suppressed");
+                    }
+                }
+                let _ = sender.send(signal);
+            }
+        });
+
+        if let Err(error) = result {
+            warn!(error = ?error, "Windows rdev keyboard fallback listener stopped");
+        }
+    });
 }
 
 fn recenter_cursor_to_virtual_center() -> Option<(f64, f64)> {
