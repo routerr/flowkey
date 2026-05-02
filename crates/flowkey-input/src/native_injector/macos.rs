@@ -212,9 +212,7 @@ pub(super) fn post_key_event(
     };
 
     // For modifier keys, build the flags that reflect the new state after
-    // this key event, then post a FlagsChanged CGEvent. This matches how
-    // macOS generates real modifier key events and keeps the CGEventTap's
-    // modifier tracking in sync with the injected state.
+    // this key event so the receiving application sees correct modifier state.
     if let Some(modifier_flag) = modifier_flag_for_keycode(keycode) {
         let mut flags = build_modifier_flags(&sink.current_modifiers);
         if key_down {
@@ -222,7 +220,6 @@ pub(super) fn post_key_event(
         } else {
             flags &= !modifier_flag;
         }
-        // FlagsChanged events use HIDSystemState, same as regular keys.
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| "failed to create macOS event source for modifier event".to_string())?;
         let event = CGEvent::new_keyboard_event(source, keycode, key_down)
@@ -234,19 +231,17 @@ pub(super) fn post_key_event(
             code = %code,
             macos_keycode = keycode,
             pressed = key_down,
-            "posting macOS modifier FlagsChanged CGEvent"
+            "posting macOS modifier key CGEvent at Session level"
         );
-        event.post(CGEventTapLocation::HID);
+        // Post at Session level (kCGSessionEventTap) — the same level enigo uses.
+        // HID-level posting requires Input Monitoring in addition to Accessibility;
+        // Session-level posting requires only Accessibility, and is sufficient for
+        // injecting into the foreground application.
+        event.post(CGEventTapLocation::Session);
         return Ok(());
     }
 
     let flags = build_modifier_flags(&sink.current_modifiers);
-    // Use HIDSystemState as the event source. This is the same source used
-    // by real hardware events and is accepted reliably by all macOS subsystems.
-    // The HID-level event tap will see the injected event, but the loopback
-    // suppressor filters it out (via matches_ignoring_timestamp). Even if
-    // loopback matching fails, the tap passes the event through because
-    // suppress_active is false when this machine is being controlled.
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| "failed to create macOS event source for key event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)
@@ -262,9 +257,16 @@ pub(super) fn post_key_event(
         control = sink.current_modifiers.control,
         alt = sink.current_modifiers.alt,
         meta = sink.current_modifiers.meta,
-        "posting macOS keyboard CGEvent"
+        "posting macOS keyboard CGEvent at Session level"
     );
-    event.post(CGEventTapLocation::HID);
+    // Post at Session level (kCGSessionEventTap). This matches the approach
+    // used by enigo (the reference implementation that worked at commit 21c0137).
+    // HID-level keyboard injection on macOS 14+ requires Input Monitoring on top
+    // of Accessibility, whereas Session-level injection requires only Accessibility.
+    // The HID-level event tap installed by MacosCapture will not see Session-level
+    // events, which is fine: when Mac is being controlled, the hotkey watcher drops
+    // all captured Mac keyboard events (daemon is not in Controlling state).
+    event.post(CGEventTapLocation::Session);
     Ok(())
 }
 
