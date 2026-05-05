@@ -108,6 +108,8 @@ impl NativeInputSink {
                 // is running on the same process.
                 #[cfg(target_os = "macos")]
                 {
+                    let key_code = parse_key_code(code);
+                    let excluded_modifier = modifier_code_for(&key_code);
                     debug!(
                         target: "keyboard_trace",
                         platform = self.platform,
@@ -119,6 +121,7 @@ impl NativeInputSink {
                         meta = modifiers.meta,
                         "injecting keyboard event into macOS sink"
                     );
+                    self.sync_modifiers(modifiers, excluded_modifier)?;
                     self.update_modifier_state(code, true);
                     self.current_modifiers = *modifiers;
                     platform::post_key_event(self, code, true)
@@ -135,6 +138,8 @@ impl NativeInputSink {
             } => {
                 #[cfg(target_os = "macos")]
                 {
+                    let key_code = parse_key_code(code);
+                    let excluded_modifier = modifier_code_for(&key_code);
                     debug!(
                         target: "keyboard_trace",
                         platform = self.platform,
@@ -146,6 +151,7 @@ impl NativeInputSink {
                         meta = modifiers.meta,
                         "injecting keyboard event into macOS sink"
                     );
+                    self.sync_modifiers(modifiers, excluded_modifier)?;
                     self.update_modifier_state(code, false);
                     self.current_modifiers = *modifiers;
                     platform::post_key_event(self, code, false)
@@ -639,7 +645,6 @@ fn named_key(named: NamedKey) -> Option<Key> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 fn modifier_code_for(key_code: &KeyCode) -> Option<ModifierKind> {
     match key_code {
         KeyCode::Modifier(kind) => Some(*kind),

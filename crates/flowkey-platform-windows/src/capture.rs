@@ -106,7 +106,7 @@ impl InputCapture for WindowsExclusiveCapture {
         let loopback = self.loopback.clone();
         let suppression_enabled = Arc::clone(&self.suppression_enabled);
         let restart_count = Arc::clone(&self.restart_count);
-        let native_keyboard_events = Arc::new(AtomicU64::new(0));
+        let native_keyboard_last_seen_us = Arc::new(AtomicU64::new(0));
         self.receiver = Some(receiver);
         self.started = true;
 
@@ -115,13 +115,13 @@ impl InputCapture for WindowsExclusiveCapture {
                 binding.clone(),
                 loopback.clone(),
                 sender.clone(),
-                Arc::clone(&native_keyboard_events),
+                Arc::clone(&native_keyboard_last_seen_us),
             );
             spawn_polling_keyboard_fallback(
                 binding.clone(),
                 loopback.clone(),
                 sender.clone(),
-                Arc::clone(&native_keyboard_events),
+                Arc::clone(&native_keyboard_last_seen_us),
             );
 
             let backoff = [
@@ -138,7 +138,7 @@ impl InputCapture for WindowsExclusiveCapture {
                     loopback.clone(),
                     Arc::clone(&suppression_enabled),
                     sender.clone(),
-                    Arc::clone(&native_keyboard_events),
+                    Arc::clone(&native_keyboard_last_seen_us),
                 )
                 .join();
 
@@ -213,7 +213,7 @@ struct NativeGrabState {
     suppression_enabled: Arc<AtomicBool>,
     sender: mpsc::Sender<CaptureSignal>,
     pending_recenter: Option<(f64, f64)>,
-    native_keyboard_events: Arc<AtomicU64>,
+    native_keyboard_last_seen_us: Arc<AtomicU64>,
 }
 
 thread_local! {
@@ -271,7 +271,9 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
     let pressed = matches!(msg_id, WM_KEYDOWN | WM_SYSKEYDOWN);
     let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
     let vk = kb.vkCode as u16;
-    state.native_keyboard_events.fetch_add(1, Ordering::SeqCst);
+    state
+        .native_keyboard_last_seen_us
+        .store(now_micros(), Ordering::SeqCst);
 
     let rdev_key = rdev_key_from_vk(vk);
 
@@ -400,6 +402,19 @@ fn sync_current_modifier_state(capture_state: &mut CaptureState) {
 
 unsafe fn key_is_down(vk: u16) -> bool {
     GetAsyncKeyState(vk as i32) as u16 & 0x8000 != 0
+}
+
+fn now_micros() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64
+}
+
+fn native_keyboard_recently_seen(last_seen_us: &AtomicU64) -> bool {
+    const NATIVE_KEYBOARD_GRACE_US: u64 = 250_000;
+    let last_seen = last_seen_us.load(Ordering::SeqCst);
+    last_seen != 0 && now_micros().saturating_sub(last_seen) < NATIVE_KEYBOARD_GRACE_US
 }
 
 fn handle_mouse(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) -> bool {
@@ -655,7 +670,7 @@ fn spawn_grab_thread(
     loopback: Option<SharedLoopbackSuppressor>,
     suppression_enabled: Arc<AtomicBool>,
     sender: mpsc::Sender<CaptureSignal>,
-    native_keyboard_events: Arc<AtomicU64>,
+    native_keyboard_last_seen_us: Arc<AtomicU64>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let hmod = unsafe { GetModuleHandleW(null_mut()) };
@@ -716,7 +731,7 @@ fn spawn_grab_thread(
                 suppression_enabled,
                 sender,
                 pending_recenter: None,
-                native_keyboard_events,
+                native_keyboard_last_seen_us,
             });
         });
 
@@ -753,7 +768,7 @@ fn spawn_polling_keyboard_fallback(
     binding: HotkeyBinding,
     loopback: Option<SharedLoopbackSuppressor>,
     sender: mpsc::Sender<CaptureSignal>,
-    native_keyboard_events: Arc<AtomicU64>,
+    native_keyboard_last_seen_us: Arc<AtomicU64>,
 ) {
     thread::spawn(move || {
         const KEYS: &[(u16, &str)] = &[
@@ -870,7 +885,7 @@ fn spawn_polling_keyboard_fallback(
 
         info!("Windows GetAsyncKeyState keyboard fallback starting");
         loop {
-            if native_keyboard_events.load(Ordering::SeqCst) > 0 {
+            if native_keyboard_recently_seen(&native_keyboard_last_seen_us) {
                 thread::sleep(Duration::from_millis(25));
                 continue;
             }
@@ -890,10 +905,7 @@ fn spawn_polling_keyboard_fallback(
                     );
 
                     sync_current_modifier_state(&mut capture_state);
-                    let timestamp_us = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_micros() as u64;
+                    let timestamp_us = now_micros();
                     let rdev_key = rdev_key_from_vk(*vk);
 
                     let Some(input) =
@@ -951,7 +963,7 @@ fn spawn_rdev_keyboard_fallback(
     binding: HotkeyBinding,
     loopback: Option<SharedLoopbackSuppressor>,
     sender: mpsc::Sender<CaptureSignal>,
-    native_keyboard_events: Arc<AtomicU64>,
+    native_keyboard_last_seen_us: Arc<AtomicU64>,
 ) {
     thread::spawn(move || {
         let mut tracker = HotkeyTracker::new(binding);
@@ -967,7 +979,7 @@ fn spawn_rdev_keyboard_fallback(
                 return;
             }
 
-            if native_keyboard_events.load(Ordering::SeqCst) > 0 {
+            if native_keyboard_recently_seen(&native_keyboard_last_seen_us) {
                 return;
             }
 
