@@ -171,6 +171,24 @@ pub(super) fn post_mouse_button(
     Ok(())
 }
 
+pub(super) fn trigger_mission_control(sink: &mut NativeInputSink) -> Result<(), String> {
+    let control_keycode: CGKeyCode = 0x3B; // ControlLeft
+    let arrow_up_keycode: CGKeyCode = 0x7E; // ArrowUp
+
+    record_loopback_key_event(&sink.loopback, "ControlLeft", true, with_modifier_applied(sink.current_modifiers, "ControlLeft"));
+    record_loopback_key_event(&sink.loopback, "ArrowUp", true, with_modifier_applied(with_modifier_applied(sink.current_modifiers, "ControlLeft"), "ArrowUp"));
+    record_loopback_key_event(&sink.loopback, "ArrowUp", false, with_modifier_applied(with_modifier_applied(sink.current_modifiers, "ControlLeft"), "ArrowUp"));
+    record_loopback_key_event(&sink.loopback, "ControlLeft", false, sink.current_modifiers);
+
+    post_macos_key_event(control_keycode, true, CGEventFlags::CGEventFlagControl)?;
+    post_macos_key_event(arrow_up_keycode, true, CGEventFlags::CGEventFlagControl)?;
+    post_macos_key_event(arrow_up_keycode, false, CGEventFlags::CGEventFlagControl)?;
+    post_macos_key_event(control_keycode, false, CGEventFlags::CGEventFlagNull)?;
+
+    Ok(())
+}
+
+
 /// Post a keyboard event directly via CGEvent, bypassing enigo.
 /// This mirrors the approach used for mouse buttons — enigo's keyboard
 /// implementation can fail silently on macOS when an active CGEventTap

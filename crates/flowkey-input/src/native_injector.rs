@@ -188,14 +188,19 @@ impl NativeInputSink {
                 ..
             } => {
                 self.sync_modifiers(modifiers, None)?;
-                if *delta_y != 0 {
+                #[cfg(target_os = "macos")]
+                let (delta_x, delta_y) = (-*delta_x, -*delta_y);
+                #[cfg(not(target_os = "macos"))]
+                let (delta_x, delta_y) = (*delta_x, *delta_y);
+
+                if delta_y != 0 {
                     self.enigo
-                        .scroll(*delta_y, Axis::Vertical)
+                        .scroll(delta_y, Axis::Vertical)
                         .map_err(|error| error.to_string())?;
                 }
-                if *delta_x != 0 {
+                if delta_x != 0 {
                     self.enigo
-                        .scroll(*delta_x, Axis::Horizontal)
+                        .scroll(delta_x, Axis::Horizontal)
                         .map_err(|error| error.to_string())?;
                 }
                 Ok(())
@@ -354,6 +359,12 @@ impl NativeInputSink {
         // can crash the controlled-side daemon.
         #[cfg(target_os = "macos")]
         {
+            if button == Button::Middle {
+                if matches!(direction, Direction::Press) {
+                    platform::trigger_mission_control(self)?;
+                }
+                return Ok(());
+            }
             platform::post_mouse_button(self, button, direction)?;
         }
         #[cfg(not(target_os = "macos"))]
