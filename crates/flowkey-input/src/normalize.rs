@@ -146,7 +146,7 @@ pub fn normalize_button(button: rdev::Button) -> MouseButton {
         rdev::Button::Left => MouseButton::Left,
         rdev::Button::Right => MouseButton::Right,
         rdev::Button::Middle => MouseButton::Middle,
-        _ => MouseButton::Left,
+        rdev::Button::Unknown(_) => MouseButton::Middle,
     }
 }
 
@@ -198,5 +198,7 @@ mod tests {
             Some("ControlRight")
         );
         assert_eq!(normalize_button(rdev::Button::Middle), MouseButton::Middle);
+        assert_eq!(normalize_button(rdev::Button::Unknown(2)), MouseButton::Middle);
+        assert_eq!(normalize_button(rdev::Button::Unknown(3)), MouseButton::Middle);
     }
 }
