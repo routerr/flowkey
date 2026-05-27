@@ -360,10 +360,15 @@ fn main() {
         .on_window_event(|event| {
             if let WindowEvent::CloseRequested { api, .. } = event.event() {
                 api.prevent_close();
-                request_daemon_shutdown(event.window().app_handle().clone());
+                event.window().hide().unwrap();
             }
         })
         .on_system_tray_event(|app, event| match event {
+            SystemTrayEvent::DoubleClick { .. } => {
+                let window = app.get_window("main").unwrap();
+                window.show().unwrap();
+                window.set_focus().unwrap();
+            }
             SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
                 "quit" => {
                     request_daemon_shutdown(app.clone());
@@ -378,6 +383,9 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let app_handle = app.handle();
             #[cfg(target_os = "windows")]
             {
