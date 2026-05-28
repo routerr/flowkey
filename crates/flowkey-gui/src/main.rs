@@ -36,8 +36,56 @@ struct PermissionStatusView {
 #[tauri::command]
 async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
     let config = Config::load_or_default().map_err(|e| e.to_string())?;
-    flowkey_net::discovery::discover(Duration::from_secs(1), Some(&config.node.id))
-        .map_err(|e| e.to_string())
+    let local_id = config.node.id.clone();
+
+    // 1. mDNS discovery (works for same-subnet)
+    let mut peers = match flowkey_net::discovery::discover(Duration::from_secs(2), Some(&local_id)) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "mDNS discovery failed");
+            Vec::new()
+        }
+    };
+    let mut known_ids: std::collections::HashSet<String> =
+        peers.iter().map(|p| p.id.clone()).collect();
+
+    // 2. Add configured peers with DNS-resolved addresses
+    for peer in &config.peers {
+        if peer.id == local_id || known_ids.contains(&peer.id) {
+            continue;
+        }
+
+        // Resolve the configured address via DNS if it's a hostname
+        let addrs = if let Ok(sa) = peer.addr.parse::<std::net::SocketAddr>() {
+            vec![sa.to_string()]
+        } else {
+            // It's a hostname — resolve it via DNS
+            flowkey_net::discovery::resolve_hostname_to_addrs(
+                peer.addr.rsplit_once(':')
+                    .map(|(h, _)| h)
+                    .unwrap_or(&peer.addr),
+                peer.addr.rsplit_once(':')
+                    .and_then(|(_, p)| p.parse().ok())
+                    .unwrap_or(48571),
+            )
+        };
+
+        if !addrs.is_empty() {
+            known_ids.insert(peer.id.clone());
+            peers.push(DiscoveredPeer {
+                id: peer.id.clone(),
+                name: peer.name.clone(),
+                addrs,
+                hostname: String::new(),
+                service_name: String::new(),
+                is_pairing: false,
+                pairing_port: None,
+            });
+        }
+    }
+
+    peers.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    Ok(peers)
 }
 
 #[tauri::command]

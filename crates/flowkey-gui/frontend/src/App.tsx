@@ -434,34 +434,53 @@ function App() {
                   </div>
                 ) : (
                   <ul className="peer-list">
-                    {discoveredPeers.map((peer, i) => (
-                      <li key={peer.id} className="peer-item" style={{ animationDelay: `${i * 0.05}s` }}>
-                        <div className="peer-item-left">
-                          <div className={`peer-avatar ${peer.is_pairing ? 'peer-avatar--pairing' : ''}`}>
-                            {peerInitial(peer.name)}
+                    {discoveredPeers.map((peer, i) => {
+                      const isConfigured = config?.peers?.some(p => p.id === peer.id) ?? false
+                      const isConnected = status?.connected_peer_ids?.includes(peer.id) ?? false
+                      const isHostname = !peer.service_name // configured peers have empty service_name
+
+                      return (
+                        <li key={peer.id} className={`peer-item ${isConfigured ? 'peer-item--configured' : ''}`} style={{ animationDelay: `${i * 0.05}s` }}>
+                          <div className="peer-item-left">
+                            <div className={isConnected ? 'peer-avatar peer-avatar--connected' : 'peer-avatar'}>
+                              {peerInitial(peer.name)}
+                            </div>
+                            <div className="peer-details">
+                              <span className="peer-name">{peer.name}</span>
+                              <span className="peer-id">{isConfigured ? peer.id.slice(0, 20) : peer.id.slice(0, 16)}…</span>
+                              {isConfigured && peer.addrs.length > 0 && (
+                                <span className="peer-addr">{peer.addrs[0]}</span>
+                              )}
+                            </div>
                           </div>
-                          <div className="peer-details">
-                            <span className="peer-name">{peer.name}</span>
-                            <span className="peer-id">{peer.id.slice(0, 16)}…</span>
+                          <div className="peer-actions">
+                            {peer.is_pairing && !isConfigured ? (
+                              <button
+                                onClick={() => connectToPeer(peer)}
+                                className="btn btn-primary btn-sm"
+                              >
+                                Connect
+                              </button>
+                            ) : isConnected ? (
+                              <span className="peer-status-tag peer-status-tag--connected">
+                                <span className="status-indicator" />
+                                Connected
+                              </span>
+                            ) : isConfigured ? (
+                              <span className="peer-status-tag peer-status-tag--known">
+                                <span className="status-indicator" />
+                                Configured
+                              </span>
+                            ) : (
+                              <span className="peer-status-tag peer-status-tag--online">
+                                <span className="status-indicator" />
+                                Online
+                              </span>
+                            )}
                           </div>
-                        </div>
-                        <div className="peer-actions">
-                          {peer.is_pairing ? (
-                            <button
-                              onClick={() => connectToPeer(peer)}
-                              className="btn btn-primary btn-sm"
-                            >
-                              Connect
-                            </button>
-                          ) : (
-                            <span className="peer-status-tag peer-status-tag--connected">
-                              <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} />
-                              Connected
-                            </span>
-                          )}
-                        </div>
-                      </li>
-                    ))}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
