@@ -5,7 +5,7 @@
 
 use flowkey_config::Config;
 use flowkey_daemon::{spawn_supervised, DaemonHandle};
-use flowkey_net::discovery::{DiscoveredPeer, DiscoveryAdvertisement};
+use flowkey_net::discovery::{resolve_hostname_to_addrs, DiscoveredPeer, DiscoveryAdvertisement};
 use flowkey_net::pairing::{initiate_pairing_client, run_pairing_listener, PairingProposal};
 #[cfg(target_os = "macos")]
 use flowkey_platform_macos::control_ipc::connect_to_control_socket;
@@ -55,20 +55,50 @@ async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
             continue;
         }
 
-        // Resolve the configured address via DNS if it's a hostname
-        let addrs = if let Ok(sa) = peer.addr.parse::<std::net::SocketAddr>() {
-            vec![sa.to_string()]
-        } else {
-            // It's a hostname — resolve it via DNS
-            flowkey_net::discovery::resolve_hostname_to_addrs(
-                peer.addr.rsplit_once(':')
+        // Resolve the configured address: if it's a hostname, resolve it via DNS
+        let mut addrs = Vec::new();
+        let default_port = 48571;
+        let (_configured_host, _configured_port) = match peer.addr.parse::<std::net::SocketAddr>() {
+            Ok(sa) => {
+                addrs.push(sa.to_string());
+                (sa.ip().to_string(), sa.port())
+            }
+            Err(_) => {
+                // It's a hostname — extract host and port
+                let host = peer.addr.rsplit_once(':')
                     .map(|(h, _)| h)
-                    .unwrap_or(&peer.addr),
-                peer.addr.rsplit_once(':')
+                    .unwrap_or(&peer.addr);
+                let port = peer.addr.rsplit_once(':')
                     .and_then(|(_, p)| p.parse().ok())
-                    .unwrap_or(48571),
-            )
+                    .unwrap_or(default_port);
+                let resolved = resolve_hostname_to_addrs(host, port);
+                for addr in &resolved {
+                    if !addrs.contains(addr) {
+                        addrs.push(addr.clone());
+                    }
+                }
+                (host.to_string(), port)
+            }
         };
+
+        // Also try resolving the peer's name/ID as a hostname via DNS
+        // (handles Tailscale Magic DNS, Bonjour .local., etc.)
+        let name_addrs = resolve_hostname_to_addrs(&peer.id, default_port);
+        for addr in name_addrs {
+            if !addrs.contains(&addr) {
+                addrs.push(addr);
+            }
+        }
+
+        // If we still have no addresses, try the peer's display name too
+        if addrs.is_empty() && peer.name != peer.id {
+            let name_addrs = resolve_hostname_to_addrs(&peer.name, default_port);
+            for addr in name_addrs {
+                if !addrs.contains(&addr) {
+                    addrs.push(addr);
+                }
+            }
+        }
 
         if !addrs.is_empty() {
             known_ids.insert(peer.id.clone());
