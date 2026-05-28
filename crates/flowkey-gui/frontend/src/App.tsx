@@ -437,7 +437,6 @@ function App() {
                     {discoveredPeers.map((peer, i) => {
                       const isConfigured = config?.peers?.some(p => p.id === peer.id) ?? false
                       const isConnected = status?.connected_peer_ids?.includes(peer.id) ?? false
-                      const isHostname = !peer.service_name // configured peers have empty service_name
 
                       return (
                         <li key={peer.id} className={`peer-item ${isConfigured ? 'peer-item--configured' : ''}`} style={{ animationDelay: `${i * 0.05}s` }}>
