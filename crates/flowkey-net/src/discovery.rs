@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -12,6 +12,7 @@ pub const PROPERTY_NODE_ID: &str = "node_id";
 pub const PROPERTY_NODE_NAME: &str = "node_name";
 pub const PROPERTY_IS_PAIRING: &str = "is_pairing";
 pub const PROPERTY_PAIRING_PORT: &str = "pairing_port";
+pub const PROPERTY_HOSTNAME: &str = "hostname";
 
 pub struct DiscoveryAdvertisement {
     daemon: ServiceDaemon,
@@ -70,6 +71,19 @@ pub fn advertise(
         ),
         ("ips", routable_ips.as_str()),
     ];
+
+    // Include local hostname for DNS-based discovery (e.g., Tailscale Magic DNS)
+    let hostname_prop: String;
+    if let Ok(h) = std::env::var("HOSTNAME").or_else(|_| std::env::var("COMPUTERNAME")) {
+        let trimmed = h.trim().to_string();
+        if cfg!(target_os = "macos") {
+            // On macOS, append .local for Bonjour-style lookup
+            hostname_prop = format!("{}.local.", trimmed);
+        } else {
+            hostname_prop = trimmed;
+        }
+        properties.push((PROPERTY_HOSTNAME, hostname_prop.as_str()));
+    }
 
     let port_str;
     if let Some(port) = pairing_port {
@@ -169,6 +183,16 @@ fn peer_from_resolved_service(service: &mdns_sd::ResolvedService) -> Option<Disc
         }
     }
 
+    // Try DNS resolution from the advertised hostname (for Tailscale Magic DNS)
+    if let Some(hostname) = service.txt_properties.get_property_val_str(PROPERTY_HOSTNAME) {
+        let dns_addrs = resolve_hostname_to_addrs(hostname, service.port);
+        for addr in dns_addrs {
+            if !addrs.contains(&addr) {
+                addrs.push(addr);
+            }
+        }
+    }
+
     addrs.sort(); // Predictable order
     addrs.dedup();
 
@@ -196,6 +220,122 @@ fn peer_from_resolved_service(service: &mdns_sd::ResolvedService) -> Option<Disc
         is_pairing,
         pairing_port,
     })
+}
+
+/// Resolve a hostname to SocketAddr strings via DNS.
+/// Supports standard DNS, Bonjour `.local.` suffix, and Tailscale Magic DNS.
+pub fn resolve_hostname_to_addrs(hostname: &str, port: u16) -> Vec<String> {
+    let mut results = Vec::new();
+
+    // Already an IP? Skip resolution.
+    if hostname.parse::<std::net::IpAddr>().is_ok() {
+        return results;
+    }
+
+    let hostname = hostname.trim_end_matches('.');
+
+    // Try the hostname as-is
+    if let Ok(addrs) = format!("{}:{}", hostname, port).to_socket_addrs() {
+        for addr in addrs {
+            let s = addr.to_string();
+            if !results.contains(&s) {
+                results.push(s);
+            }
+        }
+    }
+
+    // Try resolving as a Tailscale Magic DNS hostname
+    let tailscale_domains = [".ts.net", ".tailscale.ts.net"];
+    for domain in &tailscale_domains {
+        if !hostname.ends_with(domain) {
+            let short = hostname
+                .trim_end_matches(".local")
+                .trim_end_matches(".ts.net")
+                .trim_end_matches(".tailscale.ts.net");
+            let fqdn = format!("{}{}", short, domain);
+            if let Ok(addrs) = format!("{}:{}", fqdn, port).to_socket_addrs() {
+                for addr in addrs {
+                    let s = addr.to_string();
+                    if !results.contains(&s) {
+                        results.push(s);
+                    }
+                }
+            }
+        }
+    }
+
+    // Try Bonjour `.local.` resolution
+    if !hostname.ends_with(".local") {
+        if let Ok(addrs) = format!("{}:{}", hostname, port).to_socket_addrs() {
+            for addr in addrs {
+                let s = addr.to_string();
+                if !results.contains(&s) {
+                    results.push(s);
+                }
+            }
+        }
+    }
+
+    results
+}
+
+/// Collect candidate addresses for a peer using all available resolution methods.
+/// Merges mDNS-discovered addresses with DNS-resolved hostnames.
+pub fn collect_peer_candidates(
+    configured_addr: &str,
+    mdn_addrs: &[String],
+    _peer_id: &str,
+) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+
+    // Add mDNS-discovered addresses first (most up-to-date for LAN)
+    for addr in mdn_addrs {
+        if !candidates.contains(addr) {
+            candidates.push(addr.clone());
+        }
+    }
+
+    // Parse the configured address
+    let default_port = 48571;
+    let (host_str, port) = if let Ok(sa) = configured_addr.parse::<SocketAddr>() {
+        // Already an IP:port pair — add it directly
+        let s = sa.to_string();
+        if !candidates.contains(&s) {
+            candidates.push(s);
+        }
+        (sa.ip().to_string(), sa.port())
+    } else if let Some((host_part, port_part)) = configured_addr.rsplit_once(':') {
+        let p = port_part.parse::<u16>().unwrap_or(default_port);
+        (host_part.to_string(), p)
+    } else {
+        (configured_addr.to_string(), default_port)
+    };
+
+    // Try DNS resolution
+    let dns_addrs = resolve_hostname_to_addrs(&host_str, port);
+    for addr in dns_addrs {
+        if !candidates.contains(&addr) {
+            candidates.push(addr);
+        }
+    }
+
+    // Try short hostname with Tailscale suffixes (even if host_str is not clearly a Tailscale name)
+    let short = host_str.trim_end_matches(".local").trim_end_matches(".ts.net").trim_end_matches(".tailscale.ts.net");
+    for suffix in [".ts.net", ".tailscale.ts.net"] {
+        if !host_str.ends_with(suffix) {
+            let fqdn = format!("{}{}", short, suffix);
+            if let Ok(dns_addrs) = format!("{}:{}", fqdn, port).to_socket_addrs() {
+                for addr in dns_addrs {
+                    let s = addr.to_string();
+                    if !candidates.contains(&s) {
+                        candidates.push(s);
+                    }
+                }
+            }
+        }
+    }
+
+    candidates
 }
 
 fn sanitize_label(value: &str) -> String {

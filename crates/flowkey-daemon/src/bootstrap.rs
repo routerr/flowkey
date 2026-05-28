@@ -13,6 +13,7 @@ use flowkey_core::RuntimeSnapshot;
 use flowkey_input::hotkey::HotkeyBinding;
 use flowkey_input::loopback::LoopbackSuppressor;
 use flowkey_net::connection::{connect_and_authenticate, SessionSender};
+use flowkey_net::discovery::collect_peer_candidates;
 use flowkey_net::heartbeat::HeartbeatConfig;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -206,30 +207,51 @@ pub(crate) async fn run_daemon_with_shutdown(
                 let mut backoff = ReconnectBackoff::default();
                 loop {
                     let mut current_addr = peer.addr.clone();
-
                     let local_id = config.node.id.clone();
-                    if let Ok(Ok(discovered)) = tokio::task::spawn_blocking(move || {
+
+                    // Try mDNS discovery first (fastest for same-subnet)
+                    let mdn_addrs = if let Ok(Ok(discovered)) = tokio::task::spawn_blocking(move || {
                         flowkey_net::discovery::discover(Duration::from_secs(1), Some(&local_id))
                     })
                     .await
                     {
-                        if let Some(discovered_peer) =
-                            discovered.into_iter().find(|p| p.id == peer.id)
-                        {
-                            let mut candidates = discovered_peer.addrs.clone();
-                            if !candidates.contains(&current_addr) {
-                                candidates.push(current_addr.clone());
-                            }
+                        discovered.into_iter().find(|p| p.id == peer.id)
+                            .map(|p| p.addrs)
+                            .unwrap_or_default()
+                    } else {
+                        vec![]
+                    };
 
-                            if let Ok(winner) = flowkey_net::probe::run_reachability_race(
-                                &candidates,
-                                &peer.id,
-                                Duration::from_millis(500),
-                            )
-                            .await
-                            {
-                                current_addr = winner;
-                            }
+                    // Collect candidates from mDNS, configured address, and DNS resolution
+                    // This handles cross-subnet (different 192.168.x.x) and Tailscale scenarios
+                    let candidates = collect_peer_candidates(&peer.addr, &mdn_addrs, &peer.id);
+
+                    let mdn_count = mdn_addrs.len();
+                    let candidate_count = candidates.len();
+                    info!(
+                        peer = %peer.id,
+                        mdn_addrs = mdn_count,
+                        candidates = candidate_count,
+                        "collected peer address candidates"
+                    );
+
+                    if !candidates.is_empty() {
+                        if candidates.len() == 1 {
+                            current_addr = candidates[0].clone();
+                        } else if let Ok(winner) = flowkey_net::probe::run_reachability_race(
+                            &candidates,
+                            &peer.id,
+                            Duration::from_millis(1000),
+                        )
+                        .await
+                        {
+                            current_addr = winner;
+                        } else {
+                            // Fall back to the configured address if probe fails
+                            info!(
+                                peer = %peer.id,
+                                "reachability probe failed; falling back to configured address"
+                            );
                         }
                     }
 
