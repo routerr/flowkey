@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -113,6 +114,30 @@ impl Config {
             if config.switch.capture_mode == CaptureMode::Passive {
                 config.switch.capture_mode = CaptureMode::Exclusive;
                 needs_save = true;
+            }
+
+            // If this device is still using a generic generated identity, upgrade it to a
+            // more natural machine/Tailscale-based display name. Only rewrite the internal
+            // node id if there are no paired peers yet, to avoid breaking trust relationships.
+            if let Some(preferred_name) = detect_hostname() {
+                if is_generic_node_name(&config.node.name) && config.node.name != preferred_name {
+                    config.node.name = preferred_name.clone();
+                    needs_save = true;
+                }
+                if config.peers.is_empty() && is_generic_node_id(&config.node.id) {
+                    let suffix = config
+                        .node
+                        .id
+                        .strip_prefix("local-node-")
+                        .map(str::to_string)
+                        .unwrap_or_else(|| generate_token_fragment(8));
+                    let normalized = normalize_id(&preferred_name);
+                    let new_id = format!("{normalized}-{suffix}");
+                    if config.node.id != new_id {
+                        config.node.id = new_id;
+                        needs_save = true;
+                    }
+                }
             }
 
             if needs_save {
@@ -304,10 +329,26 @@ impl Config {
         &self,
         override_addr: Option<&str>,
     ) -> Result<String> {
-        advertised_listen_addr_with_override(
-            &self.node.listen_addr,
-            override_addr.or(self.node.advertised_addr.as_deref()),
-        )
+        if let Some(override_addr) = override_addr.or(self.node.advertised_addr.as_deref()) {
+            return advertised_listen_addr_with_override(&self.node.listen_addr, Some(override_addr));
+        }
+
+        let socket_addr = self
+            .node
+            .listen_addr
+            .parse::<SocketAddr>()
+            .with_context(|| format!("invalid listen address {}", self.node.listen_addr))?;
+        let port = socket_addr.port();
+
+        if let Some(dns_name) = detect_tailscale_dns_name() {
+            return Ok(format!("{}:{}", dns_name.trim_end_matches('.'), port));
+        }
+
+        if let Some(ts_ip) = detect_tailscale_ipv4() {
+            return Ok(SocketAddr::new(ts_ip, port).to_string());
+        }
+
+        advertised_listen_addr_with_override(&self.node.listen_addr, None)
     }
 
     fn generated_default() -> Self {
@@ -359,14 +400,104 @@ impl Default for Config {
 }
 
 fn detect_hostname() -> Option<String> {
-    env::var("COMPUTERNAME")
-        .ok()
+    detect_tailscale_dns_name()
+        .map(|dns| dns.trim_end_matches('.').split('.').next().unwrap_or("local-node").to_string())
         .filter(|value| !value.trim().is_empty())
+        .or_else(detect_platform_hostname)
+        .or_else(|| {
+            env::var("COMPUTERNAME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
         .or_else(|| {
             env::var("HOSTNAME")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
+        .map(|value| value.trim().to_string())
+}
+
+fn detect_platform_hostname() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        for command in [
+            ("scutil", &["--get", "LocalHostName"] as &[&str]),
+            ("scutil", &["--get", "ComputerName"] as &[&str]),
+            ("hostname", &["-s"] as &[&str]),
+        ] {
+            if let Ok(output) = Command::new(command.0).args(command.1).output() {
+                if output.status.success() {
+                    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !value.is_empty() {
+                        return Some(value);
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        for command in [
+            ("hostname", &[] as &[&str]),
+            ("cmd", &["/C", "echo", "%COMPUTERNAME%"] as &[&str]),
+        ] {
+            if let Ok(output) = Command::new(command.0).args(command.1).output() {
+                if output.status.success() {
+                    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !value.is_empty() && value != "%COMPUTERNAME%" {
+                        return Some(value);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn detect_tailscale_status_json() -> Option<serde_json::Value> {
+    let output = Command::new("tailscale").args(["status", "--json"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+fn detect_tailscale_dns_name() -> Option<String> {
+    detect_tailscale_status_json()?
+        .get("Self")?
+        .get("DNSName")?
+        .as_str()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn detect_tailscale_ipv4() -> Option<IpAddr> {
+    let json = detect_tailscale_status_json()?;
+    let ips = json
+        .get("Self")?
+        .get("TailscaleIPs")?
+        .as_array()?;
+    for ip in ips {
+        let ip = ip.as_str()?;
+        if ip.contains(':') {
+            continue;
+        }
+        if let Ok(ip) = ip.parse::<IpAddr>() {
+            return Some(ip);
+        }
+    }
+    None
+}
+
+fn is_generic_node_name(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.is_empty() || value == "local-node" || value == "local node"
+}
+
+fn is_generic_node_id(value: &str) -> bool {
+    value == "local-node" || value.starts_with("local-node-")
 }
 
 fn normalize_id(value: &str) -> String {

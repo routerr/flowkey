@@ -236,7 +236,7 @@ pub fn discover_tailscale_peers() -> Vec<DiscoveredPeer> {
         }
 
         peers.push(DiscoveredPeer {
-            id: if !dns_name.is_empty() { dns_name.clone() } else { short_name.clone() },
+            id: short_name.clone(),
             name: short_name,
             addrs,
             hostname: dns_name.clone(),
@@ -404,6 +404,14 @@ pub fn collect_peer_candidates(
         let s = sa.to_string();
         if !candidates.contains(&s) {
             candidates.push(s);
+        }
+        // Pairing bugs or old configs may have captured an ephemeral source port.
+        // Always also try the same host on the default daemon port to self-heal.
+        if sa.port() != default_port {
+            let fallback = SocketAddr::new(sa.ip(), default_port).to_string();
+            if !candidates.contains(&fallback) {
+                candidates.push(fallback);
+            }
         }
         (sa.ip().to_string(), sa.port())
     } else if let Some((host_part, port_part)) = configured_addr.rsplit_once(':') {

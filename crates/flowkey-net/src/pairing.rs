@@ -11,6 +11,7 @@ pub struct PairingIdentity {
     pub id: String,
     pub name: String,
     pub public_key: String,
+    pub listen_addr: String,
 }
 
 /// Result of a successful pairing handshake before user confirmation.
@@ -44,10 +45,12 @@ pub async fn accept_pairing_listener(
             node_id,
             node_name,
             public_key,
+            listen_addr,
         } => PairingIdentity {
             id: node_id,
             name: node_name,
             public_key,
+            listen_addr,
         },
         other => return Err(anyhow!("expected PairingPropose, got {:?}", other)),
     };
@@ -57,6 +60,9 @@ pub async fn accept_pairing_listener(
         node_id: config.node.id.clone(),
         node_name: config.node.name.clone(),
         public_key: config.node.public_key.clone(),
+        listen_addr: config
+            .advertised_listen_addr_for_pairing(None)
+            .unwrap_or_else(|_| config.node.listen_addr.clone()),
     };
     write_pairing_message(&mut stream, &response).await?;
 
@@ -82,6 +88,9 @@ pub async fn initiate_pairing_client(
         node_id: config.node.id.clone(),
         node_name: config.node.name.clone(),
         public_key: config.node.public_key.clone(),
+        listen_addr: config
+            .advertised_listen_addr_for_pairing(None)
+            .unwrap_or_else(|_| config.node.listen_addr.clone()),
     };
     write_pairing_message(&mut stream, &proposal).await?;
 
@@ -91,10 +100,12 @@ pub async fn initiate_pairing_client(
             node_id,
             node_name,
             public_key,
+            listen_addr,
         } => PairingIdentity {
             id: node_id,
             name: node_name,
             public_key,
+            listen_addr,
         },
         other => return Err(anyhow!("expected PairingAcknowledge, got {:?}", other)),
     };

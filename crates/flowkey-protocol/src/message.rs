@@ -53,12 +53,14 @@ pub enum PairingMessage {
         node_id: String,
         node_name: String,
         public_key: String,
+        listen_addr: String,
     },
     /// Sent by the responder to acknowledge the proposal and share their identity.
     Acknowledge {
         node_id: String,
         node_name: String,
         public_key: String,
+        listen_addr: String,
     },
     /// Sent by either side to confirm the SAS code matches and they accept the pairing.
     Accept,

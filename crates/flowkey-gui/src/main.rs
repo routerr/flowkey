@@ -42,6 +42,32 @@ struct PendingPairingView {
     peer_name: String,
 }
 
+fn is_generic_display_name(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.is_empty() || value == "local-node" || value == "local node"
+}
+
+fn peer_host_keys(addrs: &[String], hostname: &str) -> std::collections::HashSet<String> {
+    let mut keys = std::collections::HashSet::new();
+    for addr in addrs {
+        if let Ok(sa) = addr.parse::<std::net::SocketAddr>() {
+            keys.insert(sa.ip().to_string());
+        } else if let Some((host, port)) = addr.rsplit_once(':') {
+            if port.parse::<u16>().is_ok() {
+                keys.insert(host.trim_matches(&['[', ']'][..]).trim_end_matches('.').to_ascii_lowercase());
+            } else {
+                keys.insert(addr.trim_matches(&['[', ']'][..]).trim_end_matches('.').to_ascii_lowercase());
+            }
+        } else {
+            keys.insert(addr.trim_matches(&['[', ']'][..]).trim_end_matches('.').to_ascii_lowercase());
+        }
+    }
+    if !hostname.is_empty() {
+        keys.insert(hostname.trim_end_matches('.').to_ascii_lowercase());
+    }
+    keys
+}
+
 #[tauri::command]
 async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
     let config = Config::load_or_default().map_err(|e| e.to_string())?;
@@ -85,6 +111,9 @@ async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
         let default_port = 48571;
         let (_configured_host, _configured_port) = match peer.addr.parse::<std::net::SocketAddr>() {
             Ok(sa) => {
+                if sa.port() != default_port {
+                    addrs.push(std::net::SocketAddr::new(sa.ip(), default_port).to_string());
+                }
                 addrs.push(sa.to_string());
                 (sa.ip().to_string(), sa.port())
             }
@@ -126,6 +155,28 @@ async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
         }
 
         if !addrs.is_empty() {
+            let candidate_keys = peer_host_keys(&addrs, "");
+            if let Some(existing) = peers.iter_mut().find(|existing| {
+                let existing_keys = peer_host_keys(&existing.addrs, &existing.hostname);
+                !existing_keys.is_disjoint(&candidate_keys)
+            }) {
+                for addr in &addrs {
+                    if !existing.addrs.contains(addr) {
+                        existing.addrs.push(addr.clone());
+                    }
+                }
+                existing.addrs.sort();
+                existing.addrs.dedup();
+                existing.id = peer.id.clone();
+                if !is_generic_display_name(&peer.name) || is_generic_display_name(&existing.name) {
+                    existing.name = peer.name.clone();
+                }
+                existing.is_pairing = false;
+                existing.pairing_port = None;
+                known_ids.insert(peer.id.clone());
+                continue;
+            }
+
             known_ids.insert(peer.id.clone());
             peers.push(DiscoveredPeer {
                 id: peer.id.clone(),
@@ -235,7 +286,7 @@ async fn confirm_pairing(state: State<'_, AppState>) -> Result<(), String> {
     config.upsert_peer(flowkey_config::PeerConfig {
         id: proposal.peer.id,
         name: proposal.peer.name,
-        addr: proposal.observed_addr.to_string(),
+        addr: proposal.peer.listen_addr,
         public_key: proposal.peer.public_key,
         trusted: true,
     });
@@ -519,10 +570,6 @@ fn main() {
                             let state = pairing_handle.state::<AppState>();
                             let mut active = state.active_pairing.lock().unwrap();
                             *active = Some(proposal);
-                            if let Some(window) = pairing_handle.get_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
                         }
                         Err(error) => {
                             tracing::warn!(%error, "always-on pairing listener failed; retrying");

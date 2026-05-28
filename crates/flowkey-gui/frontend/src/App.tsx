@@ -454,6 +454,12 @@ function App() {
                     {discoveredPeers.map((peer, i) => {
                       const isConfigured = config?.peers?.some(p => p.id === peer.id) ?? false
                       const isConnected = status?.connected_peer_ids?.includes(peer.id) ?? false
+                      const peerSubtitleRaw = isConfigured
+                        ? peer.id
+                        : (peer.hostname || peer.addrs[0] || peer.id).replace(/\.$/, '')
+                      const peerSubtitle = peerSubtitleRaw.length > 24
+                        ? `${peerSubtitleRaw.slice(0, 24)}…`
+                        : peerSubtitleRaw
 
                       return (
                         <li key={peer.id} className={`peer-item ${isConfigured ? 'peer-item--configured' : ''}`} style={{ animationDelay: `${i * 0.05}s` }}>
@@ -463,7 +469,7 @@ function App() {
                             </div>
                             <div className="peer-details">
                               <span className="peer-name">{peer.name}</span>
-                              <span className="peer-id">{isConfigured ? peer.id.slice(0, 20) : peer.id.slice(0, 16)}…</span>
+                              <span className="peer-id">{peerSubtitle}</span>
                               {isConfigured && peer.addrs.length > 0 && (
                                 <span className="peer-addr">{peer.addrs[0]}</span>
                               )}
