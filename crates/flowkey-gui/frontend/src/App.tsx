@@ -12,6 +12,28 @@ import './App.css'
 
 const CONTROL_RELEASE_GUARD_MS = 2000
 
+/* ─── Status helpers ─── */
+function statusColor(state: string, healthy: boolean) {
+  if (state === 'controlling') return 'controlling'
+  if (state === 'controlled-by') return 'controlled'
+  return healthy ? 'healthy' : 'unhealthy'
+}
+
+function statusDotClass(state: string, healthy: boolean) {
+  const c = statusColor(state, healthy)
+  return `status-dot--${c}`
+}
+
+function statusBadgeClass(state: string, healthy: boolean) {
+  const c = statusColor(state, healthy)
+  return `status-badge--${c}`
+}
+
+function peerInitial(name: string) {
+  return name.charAt(0).toUpperCase()
+}
+
+/* ─── App ─── */
 function App() {
   const [config, setConfig] = useState<Config | null>(null)
   const [status, setStatus] = useState<DaemonStatus | null>(null)
@@ -146,10 +168,10 @@ function App() {
       setError("Peer is not in pairing mode or has no address")
       return
     }
-    
+
     const ip = peer.addrs[0].split(':')[0]
     const addr = `${ip}:${peer.pairing_port}`
-    
+
     setIsPairing(true)
     setError(null)
     try {
@@ -264,206 +286,357 @@ function App() {
     permissions && (!permissions.accessibility || !permissions.input_monitoring)
 
   return (
-    <div className="container">
-      <header>
-        <div className="title-area">
-          <h1>flowkey Manager</h1>
-          {status && (
-            <span className={`status-badge ${status.session_healthy ? 'healthy' : 'unhealthy'}`}>
-              {status.state}
-            </span>
+    <div className="app-shell">
+      {/* ─── Top Navigation Bar ─── */}
+      <header className="top-bar">
+        <div className="top-bar-left">
+          <div className="app-logo">
+            <div className="app-logo-icon">⌨</div>
+            <span className="app-logo-text">flow<span>key</span></span>
+          </div>
+          {config && (
+            <div className="node-badge">
+              <span className="node-badge-dot" />
+              {config.node.name}
+            </div>
           )}
         </div>
-        {config && <div className="node-info">Node: {config.node.name} ({config.node.id})</div>}
+        <div className="top-bar-right">
+          {status && (
+            <span className={`status-badge ${statusBadgeClass(status.state, status.session_healthy)}`}>
+              <span className={`status-dot ${statusDotClass(status.state, status.session_healthy)}`} />
+              {status.state === 'idle' ? 'Standby' : status.state}
+            </span>
+          )}
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={startPairingMode}
+            disabled={isPairing}
+          >
+            ＋ Pair Device
+          </button>
+        </div>
       </header>
 
-      {error && <div className="error-bar">{error}</div>}
-      {disconnectNotif && (
-        <div className="error-bar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{disconnectNotif}</span>
-          <button onClick={() => setDisconnectNotif(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>×</button>
+      {/* ─── Notifications ─── */}
+      {error && (
+        <div className="notification-bar notification-bar--error">
+          <span>{error}</span>
+          <button className="btn-close" onClick={() => setError(null)}>✕</button>
         </div>
       )}
+
+      {disconnectNotif && (
+        <div className="notification-bar notification-bar--disconnect">
+          <span>{disconnectNotif}</span>
+          <button className="btn-close" onClick={() => setDisconnectNotif(null)}>✕</button>
+        </div>
+      )}
+
       {missingPermissions && (
-        <section className="permission-banner">
-          <div>
-            <strong>Permissions needed</strong>
+        <div className="permission-banner">
+          <div className="permission-banner-content">
+            <strong>🔒 Permissions Required</strong>
             <p>
               macOS permissions are still missing for input control or capture.
               Open System Settings to finish setup.
             </p>
           </div>
-          <button onClick={openPermissions} className="btn-primary">
+          <button onClick={openPermissions} className="btn btn-primary btn-sm">
             Open Settings
           </button>
-        </section>
+        </div>
       )}
 
-      <main>
-        {isPairing ? (
-          <section className="pairing-screen">
+      {/* ─── Active Control Banner ─── */}
+      {(status?.state === 'controlling' || status?.state === 'controlled-by') && (
+        <div className={`control-banner control-banner--${status.state === 'controlling' ? 'controlling' : 'controlled'}`}>
+          <div className="control-banner-info">
+            <span className="control-banner-icon">
+              {status.state === 'controlling' ? '⌨' : '🖥'}
+            </span>
+            <span>
+              {status.state === 'controlling'
+                ? <>Controlling <strong>{status.active_peer_id}</strong> — all input forwarded remotely</>
+                : <>Controlled by <strong>{status.active_peer_id}</strong></>
+              }
+            </span>
+          </div>
+          <button onClick={releaseControl} className="btn btn-danger btn-sm">
+            Release Control
+          </button>
+        </div>
+      )}
+
+      {/* ─── Main Content ─── */}
+      {isPairing ? (
+        <div className="pairing-overlay">
+          <div className="pairing-card">
+            <div className="pairing-icon">🔗</div>
             <h2>Pairing in Progress</h2>
+            <p>Securely connecting your devices over LAN</p>
+
             {pairingSas ? (
-              <div className="sas-display">
-                <p>Verify this code on BOTH machines:</p>
-                <div className="sas-code">{pairingSas}</div>
-                <div className="pairing-actions">
-                  <button onClick={confirmPairing} className="btn-primary">Confirm & Pair</button>
-                  <button onClick={cancelPairing} className="btn-secondary">Cancel</button>
+              <>
+                <div className="sas-display">
+                  <div className="sas-label">Verify this code on both machines</div>
+                  <div className="sas-code">{pairingSas}</div>
                 </div>
-              </div>
+                <div className="sas-actions">
+                  <button onClick={confirmPairing} className="btn btn-success">
+                    ✓ Confirm &amp; Pair
+                  </button>
+                  <button onClick={cancelPairing} className="btn btn-secondary">
+                    Cancel
+                  </button>
+                </div>
+              </>
             ) : (
-              <div className="waiting">
-                <p>Waiting for connection...</p>
-                <button onClick={cancelPairing} className="btn-secondary">Cancel</button>
+              <div className="pairing-waiting">
+                <div className="pairing-spinner" />
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 0 }}>
+                  Waiting for incoming connection...
+                </p>
+                <button onClick={cancelPairing} className="btn btn-secondary" style={{ marginTop: 8 }}>
+                  Cancel
+                </button>
               </div>
             )}
-          </section>
-        ) : (
-          <div className="dashboard">
-            <section className="peers-section">
-              {(status?.state === 'controlling' || status?.state === 'controlled-by') && (
-                <div className="active-control-banner">
-                  {status.state === 'controlling' ? (
-                    <span>Controlling <strong>{status.active_peer_id}</strong> — local input goes to remote only</span>
-                  ) : (
-                    <span>Controlled by <strong>{status.active_peer_id}</strong></span>
-                  )}
-                  <button onClick={releaseControl} className="btn-small btn-error">Release Control</button>
-                </div>
-              )}
-              <div className="section-header">
+          </div>
+        </div>
+      ) : (
+        <div className="content-grid">
+          {/* ─── Main Column ─── */}
+          <div className="content-main">
+            {/* Discovered Peers */}
+            <section className="glass-card">
+              <div className="card-header">
                 <h2>Discovered Devices</h2>
-                <button onClick={startPairingMode} className="btn-small">Make Discoverable</button>
+                <button className="btn btn-ghost btn-sm" onClick={startPairingMode}>
+                  Make Discoverable
+                </button>
               </div>
-              <ul className="peer-list">
-                {discoveredPeers.length === 0 && <li className="empty">No devices found on LAN...</li>}
-                {discoveredPeers.map(peer => (
-                  <li key={peer.id} className="peer-item">
-                    <div className="peer-info">
-                      <span className="peer-name">{peer.name}</span>
-                      <span className="peer-id">{peer.id}</span>
-                    </div>
-                    {peer.is_pairing ? (
-                      <button onClick={() => connectToPeer(peer)} className="btn-connect">Connect</button>
-                    ) : (
-                      <span className="status-tag">Connected</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-
-            <div className="side-column">
-              <section className="config-section">
-                <h2>Trusted Peers</h2>
-                <ul className="trusted-list">
-                  {config?.peers.map(peer => {
-                    const isConnected = status?.connected_peer_ids.includes(peer.id) ?? false
-                    const isControlling = status?.state === 'controlling' && status.active_peer_id === peer.id
-                    return (
-                      <li key={peer.id} className="trusted-item">
-                        <div className="peer-info">
-                          <span className="peer-name">{peer.name}</span>
-                          <span className="peer-id">{peer.id}</span>
-                          <span className={`peer-conn-badge ${isConnected ? 'connected' : 'offline'}`}>
-                            {isConnected ? 'Connected' : 'Offline'}
-                          </span>
+              <div className="card-body">
+                {discoveredPeers.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-state-icon">🔍</div>
+                    <strong>No devices found</strong>
+                    <span>Click "Make Discoverable" on the other computer or check your network</span>
+                  </div>
+                ) : (
+                  <ul className="peer-list">
+                    {discoveredPeers.map((peer, i) => (
+                      <li key={peer.id} className="peer-item" style={{ animationDelay: `${i * 0.05}s` }}>
+                        <div className="peer-item-left">
+                          <div className={`peer-avatar ${peer.is_pairing ? 'peer-avatar--pairing' : ''}`}>
+                            {peerInitial(peer.name)}
+                          </div>
+                          <div className="peer-details">
+                            <span className="peer-name">{peer.name}</span>
+                            <span className="peer-id">{peer.id.slice(0, 16)}…</span>
+                          </div>
                         </div>
                         <div className="peer-actions">
-                          {isControlling ? (
-                            <button onClick={releaseControl} className="btn-small btn-error">Release</button>
-                          ) : (
+                          {peer.is_pairing ? (
                             <button
-                              onClick={() => switchToPeer(peer.id)}
-                              className="btn-small btn-primary"
-                              disabled={!isConnected}
-                              title={isConnected ? `Control ${peer.name}` : 'Peer is offline'}
-                            >Control</button>
+                              onClick={() => connectToPeer(peer)}
+                              className="btn btn-primary btn-sm"
+                            >
+                              Connect
+                            </button>
+                          ) : (
+                            <span className="peer-status-tag peer-status-tag--connected">
+                              <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} />
+                              Connected
+                            </span>
                           )}
-                          <button onClick={() => removePeer(peer.id)} className="btn-text">Remove</button>
                         </div>
                       </li>
-                    )
-                  })}
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
 
-                  {config?.peers.length === 0 && <li className="empty">No trusted peers yet.</li>}
-                </ul>
-              </section>
-
-              <section className="diagnostics-section">
+            {/* Diagnostics & Input Debug */}
+            <section className="glass-card">
+              <div className="card-header">
                 <h2>Diagnostics</h2>
-                <div className="diag-info">
-                  <div className="diag-item">
-                    <span className="label">Capture:</span>
-                    <span className={status?.local_capture_enabled ? "text-success" : "text-error"}>
-                      {status?.local_capture_enabled ? "Enabled" : "Disabled"}
+              </div>
+              <div className="card-body">
+                <div className="diag-grid">
+                  <div className="diag-cell">
+                    <span className="diag-label">Input Capture</span>
+                    <span className={`diag-value ${status?.local_capture_enabled ? 'diag-value--active' : 'diag-value--inactive'}`}>
+                      {status?.local_capture_enabled ? 'Active' : 'Inactive'}
                     </span>
                   </div>
-                  <div className="diag-item">
-                    <span className="label">Backend:</span>
-                    <span>{status?.input_injection_backend || "-"}</span>
+                  <div className="diag-cell">
+                    <span className="diag-label">Injection Backend</span>
+                    <span className="diag-value">{status?.input_injection_backend || '—'}</span>
                   </div>
-                  <div className="notes-list">
-                    {status?.notes.map((note, i) => (
-                      <div key={i} className="note-item">• {note}</div>
+                </div>
+                {status && status.notes.length > 0 && (
+                  <div className="diag-notes">
+                    {status.notes.map((note, i) => (
+                      <div key={i} className="diag-note">{note}</div>
                     ))}
                   </div>
-                </div>
-              </section>
+                )}
+              </div>
+            </section>
 
-              <section className="diagnostics-section">
-                <div className="section-header">
-                  <h2>Input Debug</h2>
-                  <button onClick={() => setInputDebugEvents([])} className="btn-small">Clear</button>
-                </div>
-                <div className="debug-feed">
-                  {inputDebugEvents.length === 0 ? (
-                    <div className="empty">No keyboard debug events seen in this GUI session.</div>
-                  ) : (
-                    inputDebugEvents.map((item, i) => (
+            {/* Input Debug */}
+            <section className="glass-card">
+              <div className="card-header">
+                <h2>Input Debug</h2>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setInputDebugEvents([])}
+                >
+                  Clear
+                </button>
+              </div>
+              <div className="card-body" style={{ padding: '8px 10px 10px' }}>
+                {inputDebugEvents.length === 0 ? (
+                  <div className="debug-empty">No keyboard debug events in this session.</div>
+                ) : (
+                  <div className="debug-feed">
+                    {inputDebugEvents.map((item, i) => (
                       <div key={`${item.timestamp_ms}-${i}`} className="debug-line">
                         <span className="debug-kind">{item.kind}</span>
                         <span className="debug-detail">{item.detail}</span>
                       </div>
-                    ))
-                  )}
-                </div>
-              </section>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
 
-              <section className="settings-section">
+          {/* ─── Side Column ─── */}
+          <div className="content-side">
+            {/* Trusted Peers */}
+            <section className="glass-card">
+              <div className="card-header">
+                <h2>Trusted Peers</h2>
+              </div>
+              <div className="card-body" style={{ padding: '10px 12px 12px' }}>
+                {config?.peers && config.peers.length > 0 ? (
+                  <ul className="trusted-list">
+                    {config.peers.map((peer, i) => {
+                      const isConnected = status?.connected_peer_ids.includes(peer.id) ?? false
+                      const isControlling = status?.state === 'controlling' && status.active_peer_id === peer.id
+                      return (
+                        <li key={peer.id} className="trusted-item" style={{ animationDelay: `${i * 0.04}s` }}>
+                          <div className="trusted-item-left">
+                            <div
+                              className="trusted-avatar"
+                              style={{
+                                background: isConnected
+                                  ? 'linear-gradient(135deg, var(--accent-dim), var(--blue))'
+                                  : 'var(--bg-hover)',
+                                opacity: isConnected ? 1 : 0.5,
+                              }}
+                            >
+                              {peerInitial(peer.name)}
+                            </div>
+                            <div className="trusted-item-info">
+                              <span className="trusted-item-name">{peer.name}</span>
+                              <span className="trusted-item-id">{peer.id.slice(0, 12)}…</span>
+                            </div>
+                            <span className={`trusted-item-conn ${isConnected ? 'trusted-item-conn--connected' : 'trusted-item-conn--offline'}`}>
+                              {isConnected ? 'Online' : 'Offline'}
+                            </span>
+                          </div>
+                          <div className="trusted-item-actions">
+                            {isControlling ? (
+                              <button onClick={releaseControl} className="btn btn-danger btn-sm">
+                                Release
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => switchToPeer(peer.id)}
+                                className="btn btn-primary btn-sm"
+                                disabled={!isConnected}
+                                title={isConnected ? `Control ${peer.name}` : 'Peer is offline'}
+                              >
+                                Control
+                              </button>
+                            )}
+                            <button
+                              onClick={() => removePeer(peer.id)}
+                              className="btn btn-ghost btn-sm"
+                              style={{ color: 'var(--text-muted)' }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                ) : (
+                  <div className="empty-state" style={{ padding: '20px 12px' }}>
+                    <div className="empty-state-icon" style={{ fontSize: '1.5rem' }}>🤝</div>
+                    <strong>No trusted peers yet</strong>
+                    <span>Pair with another device to get started</span>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* Settings */}
+            <section className="glass-card">
+              <div className="card-header">
                 <h2>Settings</h2>
-                <div className="settings-card">
-                  <div className="setting-row">
-                    <div>
+              </div>
+              <div className="card-body" style={{ padding: '10px 0' }}>
+                <div className="settings-group">
+                  <div className="setting-row" style={{ padding: '10px 16px' }}>
+                    <div className="setting-label-group">
                       <span className="setting-label">Launch at login</span>
-                      <p>Start the manager automatically when you sign in.</p>
+                      <span className="setting-desc">Auto-start when you sign in</span>
                     </div>
                     <button
                       onClick={toggleAutostart}
-                      className={`toggle-button ${autostartEnabled ? 'enabled' : 'disabled'}`}
+                      className={`toggle ${autostartEnabled ? 'active' : ''}`}
+                      aria-label="Toggle launch at login"
                     >
-                      {autostartEnabled ? 'On' : 'Off'}
+                      <span className="toggle-knob" />
                     </button>
                   </div>
-                  <div className="setting-row">
-                    <div>
+                  <div className="setting-row" style={{ padding: '10px 16px' }}>
+                    <div className="setting-label-group">
                       <span className="setting-label">Remote control mode</span>
-                      <p>Allow trusted peers to take control without a local prompt.</p>
+                      <span className="setting-desc">Allow trusted peers to control without prompt</span>
                     </div>
                     <button
                       onClick={toggleRemoteControl}
-                      className={`toggle-button ${config?.node.accept_remote_control ? 'enabled' : 'disabled'}`}
+                      className={`toggle ${config?.node.accept_remote_control ? 'active' : ''}`}
+                      aria-label="Toggle remote control mode"
                     >
-                      {config?.node.accept_remote_control ? 'On' : 'Off'}
+                      <span className="toggle-knob" />
                     </button>
                   </div>
                 </div>
-              </section>
+              </div>
+            </section>
+
+            {/* About / Status Footer */}
+            <div style={{
+              padding: '8px 4px',
+              textAlign: 'center',
+              fontSize: '0.72rem',
+              color: 'var(--text-muted)',
+              letterSpacing: '0.02em',
+            }}>
+              flowkey &middot; LAN keyboard &amp; mouse sharing
+              {config && <span> &middot; v0.1.0</span>}
             </div>
           </div>
-        )}
-      </main>
+        </div>
+      )}
     </div>
   )
 }

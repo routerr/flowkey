@@ -45,9 +45,9 @@
       {
         "fullscreen": false,
         "resizable": true,
-        "title": "flowkey Manager",
-        "width": 800,
-        "height": 600,
+        "title": "flowkey — seamless keyboard & mouse sharing",
+        "width": 980,
+        "height": 740,
         "visible": true,
         "label": "main"
       }
