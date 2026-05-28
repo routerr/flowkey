@@ -106,6 +106,10 @@ impl HotkeyTracker {
         }
     }
 
+    pub fn is_suppressing(&self) -> bool {
+        self.suppress_remaining > 0
+    }
+
     pub fn process(&mut self, event: &InputEvent) -> HotkeyOutcome {
         if self.suppress_remaining > 0 {
             if self.binding.matches_released_component(event) {

@@ -3,6 +3,9 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use anyhow::{Context, Result};
 use flowkey_config::Config;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
@@ -154,7 +157,15 @@ pub fn discover(timeout: Duration, exclude_id: Option<&str>) -> Result<Vec<Disco
 /// This uses `tailscale status --json` and returns online peers with their
 /// Tailscale DNS name and Tailscale IPs mapped to the always-on GUI pairing port.
 pub fn discover_tailscale_peers() -> Vec<DiscoveredPeer> {
-    let output = match Command::new("tailscale").args(["status", "--json"]).output() {
+    #[cfg(target_os = "windows")]
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let mut command = Command::new("tailscale");
+    command.args(["status", "--json"]);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = match command.output() {
         Ok(output) if output.status.success() => output,
         _ => return Vec::new(),
     };

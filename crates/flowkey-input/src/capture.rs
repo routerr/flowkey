@@ -308,6 +308,10 @@ impl CaptureState {
         self.modifiers = self.tracker.to_modifiers();
     }
 
+    pub fn clear_modifiers(&mut self) {
+        self.sync_physical_modifiers(false, false, false, false, false, false, false, false);
+    }
+
     pub fn translate(
         &mut self,
         event: rdev::Event,

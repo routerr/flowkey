@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
@@ -457,7 +460,15 @@ fn detect_platform_hostname() -> Option<String> {
 }
 
 fn detect_tailscale_status_json() -> Option<serde_json::Value> {
-    let output = Command::new("tailscale").args(["status", "--json"]).output().ok()?;
+    #[cfg(target_os = "windows")]
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let mut command = Command::new("tailscale");
+    command.args(["status", "--json"]);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }

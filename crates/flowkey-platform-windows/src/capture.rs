@@ -300,7 +300,12 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
         .unwrap_or_default()
         .as_micros() as u64;
 
-    sync_current_modifier_state(&mut state.capture_state);
+    // When we are suppressing the hotkey release sequence, do not re-sync from
+    // GetAsyncKeyState — suppressed key-up events can leave the OS async state
+    // appearing stuck, which would mark every later key as Ctrl+Alt+Shift.
+    if !state.tracker.is_suppressing() {
+        sync_current_modifier_state(&mut state.capture_state);
+    }
 
     let input_event = state
         .capture_state
@@ -336,6 +341,9 @@ fn handle_keyboard(state: &mut NativeGrabState, wparam: WPARAM, lparam: LPARAM) 
 
     match state.tracker.process(&input) {
         flowkey_input::hotkey::HotkeyOutcome::Pressed => {
+            // Clear modifier state locally so subsequent input is not sent with
+            // sticky Ctrl+Alt+Shift after the control-switch hotkey fires.
+            state.capture_state.clear_modifiers();
             let _ = state.sender.send(CaptureSignal::HotkeyPressed);
             crate::debug::emit("hotkey-pressed", format!("{input:?}"));
             return true; // suppress hotkey activation to prevent leakage to foreground app
@@ -904,7 +912,9 @@ fn spawn_polling_keyboard_fallback(
                         "GetAsyncKeyState keyboard probe changed"
                     );
 
-                    sync_current_modifier_state(&mut capture_state);
+                    if !tracker.is_suppressing() {
+                        sync_current_modifier_state(&mut capture_state);
+                    }
                     let timestamp_us = now_micros();
                     let rdev_key = rdev_key_from_vk(*vk);
 
@@ -929,6 +939,7 @@ fn spawn_polling_keyboard_fallback(
 
                     match tracker.process(&input) {
                         flowkey_input::hotkey::HotkeyOutcome::Pressed => {
+                            capture_state.clear_modifiers();
                             crate::debug::emit("poll-hotkey-pressed", format!("{input:?}"));
                             let _ = sender.send(CaptureSignal::HotkeyPressed);
                             continue;
