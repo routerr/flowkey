@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -13,6 +14,7 @@ pub const PROPERTY_NODE_NAME: &str = "node_name";
 pub const PROPERTY_IS_PAIRING: &str = "is_pairing";
 pub const PROPERTY_PAIRING_PORT: &str = "pairing_port";
 pub const PROPERTY_HOSTNAME: &str = "hostname";
+pub const DEFAULT_PAIRING_PORT: u16 = 48572;
 
 pub struct DiscoveryAdvertisement {
     daemon: ServiceDaemon,
@@ -146,6 +148,106 @@ pub fn discover(timeout: Duration, exclude_id: Option<&str>) -> Result<Vec<Disco
     let mut peers = peers.into_values().collect::<Vec<_>>();
     peers.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
     Ok(peers)
+}
+
+/// Discover peers from Tailscale without requiring mDNS or prior flowkey pairing.
+/// This uses `tailscale status --json` and returns online peers with their
+/// Tailscale DNS name and Tailscale IPs mapped to the always-on GUI pairing port.
+pub fn discover_tailscale_peers() -> Vec<DiscoveredPeer> {
+    let output = match Command::new("tailscale").args(["status", "--json"]).output() {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+
+    let json: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(json) => json,
+        Err(_) => return Vec::new(),
+    };
+
+    let self_dns = json
+        .get("Self")
+        .and_then(|v| v.get("DNSName"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim_end_matches('.').to_string());
+
+    let mut peers = Vec::new();
+    let Some(map) = json.get("Peer").and_then(|v| v.as_object()) else {
+        return peers;
+    };
+
+    for value in map.values() {
+        if !value
+            .get("Online")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let dns_name = value
+            .get("DNSName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim_end_matches('.')
+            .to_string();
+        if self_dns.as_deref() == Some(dns_name.as_str()) {
+            continue;
+        }
+
+        let host_name = value
+            .get("HostName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let short_name = dns_name
+            .split('.')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| host_name.as_str())
+            .to_string();
+        if short_name.is_empty() {
+            continue;
+        }
+
+        let mut addrs = Vec::new();
+        if let Some(ts_ips) = value.get("TailscaleIPs").and_then(|v| v.as_array()) {
+            for ip in ts_ips {
+                if let Some(ip) = ip.as_str() {
+                    if ip.contains(':') {
+                        continue; // IPv6 later if needed
+                    }
+                    let addr = format!("{}:{}", ip, DEFAULT_PAIRING_PORT);
+                    if !addrs.contains(&addr) {
+                        addrs.push(addr);
+                    }
+                }
+            }
+        }
+        if !dns_name.is_empty() {
+            let dns_addr = format!("{}:{}", dns_name, DEFAULT_PAIRING_PORT);
+            if !addrs.contains(&dns_addr) {
+                addrs.push(dns_addr);
+            }
+        }
+
+        if addrs.is_empty() {
+            continue;
+        }
+
+        peers.push(DiscoveredPeer {
+            id: if !dns_name.is_empty() { dns_name.clone() } else { short_name.clone() },
+            name: short_name,
+            addrs,
+            hostname: dns_name.clone(),
+            service_name: format!("tailscale:{}", dns_name),
+            is_pairing: true,
+            pairing_port: Some(DEFAULT_PAIRING_PORT),
+        });
+    }
+
+    peers.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+    peers
 }
 
 fn peer_from_resolved_service(service: &mdns_sd::ResolvedService) -> Option<DiscoveredPeer> {

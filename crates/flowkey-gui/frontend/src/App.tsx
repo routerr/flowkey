@@ -6,6 +6,7 @@ import {
   type Config,
   type DaemonStatus,
   type InputDebugEvent,
+  type PendingPairingView,
   type PermissionStatus,
 } from './types'
 import './App.css'
@@ -41,6 +42,7 @@ function App() {
   const [autostartEnabled, setAutostartEnabled] = useState<boolean | null>(null)
   const [discoveredPeers, setDiscoveredPeers] = useState<DiscoveredPeer[]>([])
   const [pairingSas, setPairingSas] = useState<string | null>(null)
+  const [pairingPeerName, setPairingPeerName] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [disconnectNotif, setDisconnectNotif] = useState<string | null>(null)
   const [isPairing, setIsPairing] = useState(false)
@@ -112,14 +114,21 @@ function App() {
     }
   }, [status?.state])
 
-  // Poll for discovery
+  // Poll for discovery + incoming pairing proposals
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
         const peers = await invoke<DiscoveredPeer[]>('get_discovered_peers')
         setDiscoveredPeers(peers)
+
+        const pending = await invoke<PendingPairingView | null>('get_pending_pairing')
+        if (pending) {
+          setPairingSas(pending.sas_code)
+          setPairingPeerName(pending.peer_name)
+          setIsPairing(true)
+        }
       } catch (e) {
-        console.error("Discovery error:", e)
+        console.error('Discovery/pairing poll error:', e)
       }
     }, 2000)
     return () => clearInterval(interval)
@@ -156,7 +165,8 @@ function App() {
     setError(null)
     try {
       const sas = await invoke<string>('enter_pairing_mode')
-      setPairingSas(sas)
+      setPairingSas(sas || null)
+      setPairingPeerName(null)
     } catch (e) {
       setError(String(e))
       setIsPairing(false)
@@ -165,7 +175,7 @@ function App() {
 
   async function connectToPeer(peer: DiscoveredPeer) {
     if (!peer.pairing_port || peer.addrs.length === 0) {
-      setError("Peer is not in pairing mode or has no address")
+      setError('Peer has no reachable pairing address')
       return
     }
 
@@ -177,6 +187,7 @@ function App() {
     try {
       const sas = await invoke<string>('connect_to_peer', { peerAddr: addr })
       setPairingSas(sas)
+      setPairingPeerName(peer.name)
     } catch (e) {
       setError(String(e))
       setIsPairing(false)
@@ -187,6 +198,7 @@ function App() {
     try {
       await invoke('confirm_pairing')
       setPairingSas(null)
+      setPairingPeerName(null)
       setIsPairing(false)
       loadConfig()
     } catch (e) {
@@ -198,6 +210,7 @@ function App() {
     try {
       await invoke('cancel_pairing')
       setPairingSas(null)
+      setPairingPeerName(null)
       setIsPairing(false)
     } catch (e) {
       setError(String(e))
@@ -383,11 +396,12 @@ function App() {
           <div className="pairing-card">
             <div className="pairing-icon">🔗</div>
             <h2>Pairing in Progress</h2>
-            <p>Securely connecting your devices over LAN</p>
+            <p>Securely connecting your devices over LAN or Tailscale</p>
 
             {pairingSas ? (
               <>
                 <div className="sas-display">
+                  {pairingPeerName && <div className="sas-label">Pairing with {pairingPeerName}</div>}
                   <div className="sas-label">Verify this code on both machines</div>
                   <div className="sas-code">{pairingSas}</div>
                 </div>
@@ -406,6 +420,9 @@ function App() {
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 0 }}>
                   Waiting for incoming connection...
                 </p>
+                <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: 6, marginBottom: 0 }}>
+                  This app is already discoverable while the window is open.
+                </p>
                 <button onClick={cancelPairing} className="btn btn-secondary" style={{ marginTop: 8 }}>
                   Cancel
                 </button>
@@ -422,15 +439,15 @@ function App() {
               <div className="card-header">
                 <h2>Discovered Devices</h2>
                 <button className="btn btn-ghost btn-sm" onClick={startPairingMode}>
-                  Make Discoverable
+                  Ready to Pair
                 </button>
               </div>
               <div className="card-body">
                 {discoveredPeers.length === 0 ? (
                   <div className="empty-state">
                     <div className="empty-state-icon">🔍</div>
-                    <strong>No devices found</strong>
-                    <span>Click "Make Discoverable" on the other computer or check your network</span>
+                    <strong>No devices found yet</strong>
+                    <span>Open flowkey on the other computer. LAN and Tailscale devices should appear automatically.</span>
                   </div>
                 ) : (
                   <ul className="peer-list">
@@ -453,7 +470,7 @@ function App() {
                             </div>
                           </div>
                           <div className="peer-actions">
-                            {peer.is_pairing && !isConfigured ? (
+                            {(peer.pairing_port && peer.addrs.length > 0 && !isConfigured && !isConnected) ? (
                               <button
                                 onClick={() => connectToPeer(peer)}
                                 className="btn btn-primary btn-sm"

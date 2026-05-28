@@ -39,6 +39,11 @@ export interface PermissionStatus {
   input_monitoring: boolean;
 }
 
+export interface PendingPairingView {
+  sas_code: string;
+  peer_name: string;
+}
+
 export interface DaemonStatus {
   state: string;
   active_peer_id?: string;

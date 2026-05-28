@@ -6,6 +6,7 @@ use tracing::info;
 use flowkey_config::Config;
 use flowkey_protocol::message::{generate_sas_code, PairingMessage};
 
+#[derive(Debug, Clone)]
 pub struct PairingIdentity {
     pub id: String,
     pub name: String,
@@ -13,6 +14,7 @@ pub struct PairingIdentity {
 }
 
 /// Result of a successful pairing handshake before user confirmation.
+#[derive(Debug, Clone)]
 pub struct PairingProposal {
     pub peer: PairingIdentity,
     pub sas_code: String,
@@ -22,6 +24,13 @@ pub struct PairingProposal {
 pub async fn run_pairing_listener(
     config: Config,
     listener: TcpListener,
+) -> Result<PairingProposal> {
+    accept_pairing_listener(&config, &listener).await
+}
+
+pub async fn accept_pairing_listener(
+    config: &Config,
+    listener: &TcpListener,
 ) -> Result<PairingProposal> {
     let (mut stream, addr) = listener
         .accept()

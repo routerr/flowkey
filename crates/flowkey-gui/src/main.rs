@@ -5,8 +5,11 @@
 
 use flowkey_config::Config;
 use flowkey_daemon::{spawn_supervised, DaemonHandle};
-use flowkey_net::discovery::{resolve_hostname_to_addrs, DiscoveredPeer, DiscoveryAdvertisement};
-use flowkey_net::pairing::{initiate_pairing_client, run_pairing_listener, PairingProposal};
+use flowkey_net::discovery::{
+    discover_tailscale_peers, resolve_hostname_to_addrs, DiscoveredPeer,
+    DiscoveryAdvertisement, DEFAULT_PAIRING_PORT,
+};
+use flowkey_net::pairing::{accept_pairing_listener, initiate_pairing_client, PairingProposal};
 #[cfg(target_os = "macos")]
 use flowkey_platform_macos::control_ipc::connect_to_control_socket;
 #[cfg(target_os = "windows")]
@@ -33,6 +36,12 @@ struct PermissionStatusView {
     input_monitoring: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct PendingPairingView {
+    sas_code: String,
+    peer_name: String,
+}
+
 #[tauri::command]
 async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
     let config = Config::load_or_default().map_err(|e| e.to_string())?;
@@ -49,7 +58,23 @@ async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
     let mut known_ids: std::collections::HashSet<String> =
         peers.iter().map(|p| p.id.clone()).collect();
 
-    // 2. Add configured peers with DNS-resolved addresses
+    // 2. Add Tailscale peers (works across subnets and with Magic DNS)
+    for peer in discover_tailscale_peers() {
+        let addr_overlap = peers.iter().any(|existing| {
+            (!existing.hostname.is_empty() && existing.hostname == peer.hostname)
+                || existing
+                    .addrs
+                    .iter()
+                    .any(|addr| peer.addrs.iter().any(|candidate| candidate == addr))
+        });
+        if known_ids.contains(&peer.id) || addr_overlap {
+            continue;
+        }
+        known_ids.insert(peer.id.clone());
+        peers.push(peer);
+    }
+
+    // 3. Add configured peers with DNS-resolved addresses
     for peer in &config.peers {
         if peer.id == local_id || known_ids.contains(&peer.id) {
             continue;
@@ -119,6 +144,17 @@ async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
 }
 
 #[tauri::command]
+async fn get_pending_pairing(
+    state: State<'_, AppState>,
+) -> Result<Option<PendingPairingView>, String> {
+    let active = state.active_pairing.lock().unwrap();
+    Ok(active.as_ref().map(|proposal| PendingPairingView {
+        sas_code: proposal.sas_code.clone(),
+        peer_name: proposal.peer.name.clone(),
+    }))
+}
+
+#[tauri::command]
 async fn get_config() -> Result<Config, String> {
     Config::load_or_default().map_err(|e| e.to_string())
 }
@@ -162,33 +198,10 @@ async fn set_accept_remote_control(enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn enter_pairing_mode(state: State<'_, AppState>) -> Result<String, String> {
-    let config = Config::load_or_default().map_err(|e| e.to_string())?;
-
-    // Create a temporary listener for pairing on a random port
-    let listener = TcpListener::bind("0.0.0.0:0")
-        .await
-        .map_err(|e| e.to_string())?;
-    let pairing_port = listener.local_addr().map_err(|e| e.to_string())?.port();
-
-    // Start temporary advertisement for pairing
-    let advertisement = flowkey_net::discovery::advertise(&config, true, Some(pairing_port))
-        .map_err(|e| e.to_string())?;
-
-    {
-        let mut active = state.active_discovery.lock().unwrap();
-        *active = Some(advertisement);
-    }
-
-    let proposal = run_pairing_listener(config, listener)
-        .await
-        .map_err(|e| e.to_string())?;
-    let sas_code = proposal.sas_code.clone();
-
-    let mut active = state.active_pairing.lock().unwrap();
-    *active = Some(proposal);
-
-    Ok(sas_code)
+async fn enter_pairing_mode(_state: State<'_, AppState>) -> Result<String, String> {
+    // Pairing is always available while the GUI is running.
+    // Return an empty string so the frontend shows the waiting state.
+    Ok(String::new())
 }
 
 #[tauri::command]
@@ -211,11 +224,6 @@ async fn connect_to_peer(peer_addr: String, state: State<'_, AppState>) -> Resul
 
 #[tauri::command]
 async fn confirm_pairing(state: State<'_, AppState>) -> Result<(), String> {
-    let _ = {
-        let mut active = state.active_discovery.lock().unwrap();
-        active.take()
-    };
-
     let proposal = {
         let mut active = state.active_pairing.lock().unwrap();
         active
@@ -238,14 +246,8 @@ async fn confirm_pairing(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn cancel_pairing(state: State<'_, AppState>) -> Result<(), String> {
-    {
-        let mut active = state.active_discovery.lock().unwrap();
-        *active = None;
-    }
-    {
-        let mut active = state.active_pairing.lock().unwrap();
-        *active = None;
-    }
+    let mut active = state.active_pairing.lock().unwrap();
+    *active = None;
     Ok(())
 }
 
@@ -482,6 +484,54 @@ fn main() {
                 }
             });
 
+            let pairing_handle = app.handle();
+            tauri::async_runtime::spawn(async move {
+                let config = match Config::load_or_create() {
+                    Ok(config) => config,
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to load config for always-on pairing listener");
+                        return;
+                    }
+                };
+
+                let listener = match TcpListener::bind(format!("0.0.0.0:{}", DEFAULT_PAIRING_PORT)).await {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        tracing::warn!(%error, port = DEFAULT_PAIRING_PORT, "failed to bind always-on pairing listener");
+                        return;
+                    }
+                };
+
+                match flowkey_net::discovery::advertise(&config, true, Some(DEFAULT_PAIRING_PORT)) {
+                    Ok(advertisement) => {
+                        let state = pairing_handle.state::<AppState>();
+                        let mut active = state.active_discovery.lock().unwrap();
+                        *active = Some(advertisement);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to advertise always-on pairing listener");
+                    }
+                }
+
+                loop {
+                    match accept_pairing_listener(&config, &listener).await {
+                        Ok(proposal) => {
+                            let state = pairing_handle.state::<AppState>();
+                            let mut active = state.active_pairing.lock().unwrap();
+                            *active = Some(proposal);
+                            if let Some(window) = pairing_handle.get_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "always-on pairing listener failed; retrying");
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+                    }
+                }
+            });
+
             if let Some(window) = app.get_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -509,6 +559,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_discovered_peers,
+            get_pending_pairing,
             get_config,
             get_permission_status,
             open_permissions,
