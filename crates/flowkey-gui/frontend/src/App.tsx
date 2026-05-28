@@ -291,7 +291,16 @@ function App() {
       <header className="top-bar">
         <div className="top-bar-left">
           <div className="app-logo">
-            <div className="app-logo-icon">⌨</div>
+            <svg width="24" height="24" fill="none" viewBox="0 0 48 48" className="app-logo-icon">
+              <rect width="48" height="48" rx="10" fill="url(#g)" />
+              <text x="24" y="33" font-family="system-ui,sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="white">⌨</text>
+              <defs>
+                <linearGradient id="g" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#a78bfa"/>
+                  <stop offset="1" stop-color="#6366f1"/>
+                </linearGradient>
+              </defs>
+            </svg>
             <span className="app-logo-text">flow<span>key</span></span>
           </div>
           {config && (
