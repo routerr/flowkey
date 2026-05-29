@@ -441,6 +441,55 @@ fn init_tracing() {
         .try_init();
 }
 
+#[cfg(target_os = "macos")]
+fn set_activation_policy(policy: tauri::ActivationPolicy) {
+    #[link(name = "objc")]
+    extern "C" {
+        fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+        fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+        fn objc_msgSend(
+            obj: *mut std::ffi::c_void,
+            sel: *mut std::ffi::c_void,
+            arg: isize,
+        ) -> *mut std::ffi::c_void;
+    }
+
+    let cls_name = std::ffi::CString::new("NSApplication").unwrap();
+    let shared_app_sel = std::ffi::CString::new("sharedApplication").unwrap();
+    let set_policy_sel = std::ffi::CString::new("setActivationPolicy:").unwrap();
+
+    unsafe {
+        let ns_app_class = objc_getClass(cls_name.as_ptr());
+        if ns_app_class.is_null() {
+            return;
+        }
+        let shared_app_sel_ptr = sel_registerName(shared_app_sel.as_ptr());
+        let msg_send_shared_app: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+        let app = msg_send_shared_app(ns_app_class, shared_app_sel_ptr);
+        if app.is_null() {
+            return;
+        }
+
+        let (policy_val, is_regular): (isize, bool) = match policy {
+            tauri::ActivationPolicy::Regular => (0, true),
+            tauri::ActivationPolicy::Accessory => (1, false),
+            tauri::ActivationPolicy::Prohibited => (2, false),
+            _ => (1, false),
+        };
+
+        let set_policy_sel_ptr = sel_registerName(set_policy_sel.as_ptr());
+        let msg_send_set_policy: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+        msg_send_set_policy(app, set_policy_sel_ptr, policy_val);
+
+        if is_regular {
+            let activate_sel = std::ffi::CString::new("activateIgnoringOtherApps:").unwrap();
+            let activate_sel_ptr = sel_registerName(activate_sel.as_ptr());
+            let msg_send_activate: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, i8) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+            msg_send_activate(app, activate_sel_ptr, 1);
+        }
+    }
+}
+
 fn main() {
     init_tracing();
 
@@ -479,7 +528,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
+            MacosLauncher::AppleScript,
             None,
         ))
         .manage(AppState {
@@ -491,12 +540,17 @@ fn main() {
         .on_window_event(|event| {
             if let WindowEvent::CloseRequested { api, .. } = event.event() {
                 api.prevent_close();
-                event.window().hide().unwrap();
+                let window = event.window();
+                window.hide().unwrap();
+                #[cfg(target_os = "macos")]
+                set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
         })
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::DoubleClick { .. } => {
                 let window = app.get_window("main").unwrap();
+                #[cfg(target_os = "macos")]
+                set_activation_policy(tauri::ActivationPolicy::Regular);
                 window.show().unwrap();
                 window.set_focus().unwrap();
             }
@@ -506,6 +560,8 @@ fn main() {
                 }
                 "open" => {
                     let window = app.get_window("main").unwrap();
+                    #[cfg(target_os = "macos")]
+                    set_activation_policy(tauri::ActivationPolicy::Regular);
                     window.show().unwrap();
                     window.set_focus().unwrap();
                 }
@@ -515,7 +571,7 @@ fn main() {
         })
         .setup(|app| {
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             let app_handle = app.handle();
             #[cfg(target_os = "windows")]
