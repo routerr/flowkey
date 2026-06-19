@@ -1,8 +1,8 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
   <!-- Background with gradient -->
   <rect width="1024" height="1024" rx="204" fill="url(#gradient)"/>
-  <!-- White keyboard symbol -->
-  <text x="512" y="600" font-family="Arial, sans-serif" font-size="512" font-weight="bold" text-anchor="middle" fill="white">⌨</text>
+  <!-- White cursor symbol -->
+  <path d="M 320,200 L 760,640 L 530,640 L 630,880 L 530,920 L 430,680 L 320,790 Z" fill="white" />
   
   <!-- Gradient definition -->
   <defs>

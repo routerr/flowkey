@@ -69,7 +69,7 @@ This repo is now past the initial scaffold and has a working cross-platform cont
 - **Automatic Control Resume**: Daemon now automatically restores control role after network interruptions.
 - **Reachability Probing (FRP)**: Zero-config switching using UDP racing to select the best IP among multiple interfaces.
 - **Diagnostics**: `flky doctor` command added to diagnose permissions and network setup.
-- release bundles and checksum files can be generated locally or by tagged GitHub Actions releases
+- release bundles and checksum files can be generated locally via the packaging scripts
 
 The remaining gaps are mostly platform hardening and UX polish rather than missing core protocol wiring.
 
@@ -120,9 +120,7 @@ On Windows:
 .\\scripts\\package.ps1
 ```
 
-Tagged releases are also packaged automatically by `.github/workflows/package.yml`.
-
-Release outputs are currently:
+Release outputs (produced by the packaging scripts) are currently:
 
 - Linux: `tar.gz` bundle plus SHA-256 checksum
 - macOS: `.dmg` app bundle plus SHA-256 checksum; set `FLKY_MACOS_SIGN_IDENTITY`, `FLKY_MACOS_NOTARY_APPLE_ID`, `FLKY_MACOS_NOTARY_PASSWORD`, and `FLKY_MACOS_NOTARY_TEAM_ID` to sign and notarize the image

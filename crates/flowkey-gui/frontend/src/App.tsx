@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke, event } from '@tauri-apps/api'
+import { appWindow, LogicalSize } from '@tauri-apps/api/window'
 import { enable, disable, isEnabled } from 'tauri-plugin-autostart-api'
 import {
   type DiscoveredPeer,
@@ -20,11 +21,6 @@ function statusColor(state: string, healthy: boolean) {
   return healthy ? 'healthy' : 'unhealthy'
 }
 
-function statusDotClass(state: string, healthy: boolean) {
-  const c = statusColor(state, healthy)
-  return `status-dot--${c}`
-}
-
 function statusBadgeClass(state: string, healthy: boolean) {
   const c = statusColor(state, healthy)
   return `status-badge--${c}`
@@ -33,6 +29,17 @@ function statusBadgeClass(state: string, healthy: boolean) {
 function peerInitial(name: string) {
   return name.charAt(0).toUpperCase()
 }
+
+/* ─── Resize helper ─── */
+async function resizeWindow(width: number, height: number) {
+  try {
+    await appWindow.setSize(new LogicalSize(width, height))
+  } catch (e) {
+    console.error('Failed to resize window:', e)
+  }
+}
+
+type Screen = 'home' | 'pairing' | 'diagnostics'
 
 /* ─── App ─── */
 function App() {
@@ -51,11 +58,27 @@ function App() {
   const userReleasedRef = useRef(false)
   const controlStartedAtRef = useRef<number | null>(null)
 
+  // Sizing and Screen state
+  const [screen, setScreen] = useState<Screen>('home')
+
+  const transitionToScreen = async (nextScreen: Screen) => {
+    setScreen(nextScreen)
+    if (nextScreen === 'home') {
+      await resizeWindow(360, 300)
+    } else if (nextScreen === 'pairing') {
+      await resizeWindow(380, 420)
+    } else if (nextScreen === 'diagnostics') {
+      await resizeWindow(680, 580)
+    }
+  }
+
   // Load config on mount
   useEffect(() => {
     loadConfig()
     loadPermissionStatus()
     loadAutostartStatus()
+    // Default to widget size on load
+    resizeWindow(360, 300)
   }, [])
 
   // Listen for daemon status events
@@ -84,12 +107,16 @@ function App() {
     }
   }, [])
 
-  // While controlling a remote peer, swallow keyboard events at the window
-  // level so that focused UI elements (notably the "Release Control" button)
-  // cannot be re-activated by Enter/Space when the platform-level capture
-  // hook fails to suppress local key delivery (observed on some Windows
-  // setups where WH_KEYBOARD_LL is dropped and only the rdev/polling
-  // fallbacks deliver events to the daemon).
+  // Sync isPairing state to navigate to pairing screen and resize
+  useEffect(() => {
+    if (isPairing) {
+      transitionToScreen('pairing')
+    } else if (screen === 'pairing') {
+      transitionToScreen('home')
+    }
+  }, [isPairing])
+
+  // While controlling a remote peer, swallow keyboard events at the window level
   useEffect(() => {
     if (status?.state !== 'controlling') return
 
@@ -298,15 +325,17 @@ function App() {
   const missingPermissions =
     permissions && (!permissions.accessibility || !permissions.input_monitoring)
 
+  const availablePeers = config?.peers.filter(peer => status?.connected_peer_ids.includes(peer.id)) || []
+
   return (
-    <div className="app-shell">
-      {/* ─── Top Navigation Bar ─── */}
-      <header className="top-bar">
-        <div className="top-bar-left">
+    <div className={`app-shell app-shell--${screen}`}>
+      {/* ─── Header ─── */}
+      <header className="app-header">
+        <div className="app-header-left">
           <div className="app-logo">
-            <svg width="24" height="24" fill="none" viewBox="0 0 48 48" className="app-logo-icon">
+            <svg width="18" height="18" fill="none" viewBox="0 0 48 48" className="app-logo-icon">
               <rect width="48" height="48" rx="10" fill="url(#g)" />
-              <text x="24" y="33" font-family="system-ui,sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="white">⌨</text>
+              <path d="M 15,9 L 35.5,30 L 25,30 L 29.5,41.5 L 25,43 L 20.5,32 L 15,37 Z" fill="white" />
               <defs>
                 <linearGradient id="g" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
                   <stop stop-color="#a78bfa"/>
@@ -316,308 +345,314 @@ function App() {
             </svg>
             <span className="app-logo-text">flow<span>key</span></span>
           </div>
-          {config && (
-            <div className="node-badge">
-              <span className="node-badge-dot" />
+          {screen === 'home' && config && (
+            <div className="node-badge-mini" title={`Your node name: ${config.node.name}`}>
               {config.node.name}
             </div>
           )}
         </div>
-        <div className="top-bar-right">
-          {status && (
-            <span className={`status-badge ${statusBadgeClass(status.state, status.session_healthy)}`}>
-              <span className={`status-dot ${statusDotClass(status.state, status.session_healthy)}`} />
-              {status.state === 'idle' ? 'Standby' : status.state}
-            </span>
+        
+        <div className="app-header-right">
+          {screen === 'home' && (
+            <>
+              {status && (status.state === 'controlling' || status.state === 'controlled-by') && (
+                <span className={`status-badge-mini ${statusBadgeClass(status.state, status.session_healthy)}`} />
+              )}
+              <button
+                className="header-icon-btn"
+                onClick={startPairingMode}
+                disabled={isPairing}
+                title="Pair new device"
+              >
+                ＋
+              </button>
+              <button
+                className="header-icon-btn"
+                onClick={() => transitionToScreen('diagnostics')}
+                title="Diagnostics & Settings"
+              >
+                ⚙️
+              </button>
+            </>
           )}
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={startPairingMode}
-            disabled={isPairing}
-          >
-            ＋ Pair Device
-          </button>
+          
+          {screen !== 'home' && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                if (screen === 'pairing') {
+                  cancelPairing()
+                } else {
+                  transitionToScreen('home')
+                }
+              }}
+            >
+              ← Back
+            </button>
+          )}
         </div>
       </header>
 
-      {/* ─── Notifications ─── */}
-      {error && (
-        <div className="notification-bar notification-bar--error">
-          <span>{error}</span>
-          <button className="btn-close" onClick={() => setError(null)}>✕</button>
-        </div>
-      )}
-
-      {disconnectNotif && (
-        <div className="notification-bar notification-bar--disconnect">
-          <span>{disconnectNotif}</span>
-          <button className="btn-close" onClick={() => setDisconnectNotif(null)}>✕</button>
-        </div>
-      )}
-
-      {missingPermissions && (
-        <div className="permission-banner">
-          <div className="permission-banner-content">
-            <strong>🔒 Permissions Required</strong>
-            <p>
-              macOS permissions are still missing for input control or capture.
-              Open System Settings to finish setup.
-            </p>
-          </div>
-          <button onClick={openPermissions} className="btn btn-primary btn-sm">
-            Open Settings
-          </button>
-        </div>
-      )}
-
-      {/* ─── Active Control Banner ─── */}
-      {(status?.state === 'controlling' || status?.state === 'controlled-by') && (
-        <div className={`control-banner control-banner--${status.state === 'controlling' ? 'controlling' : 'controlled'}`}>
-          <div className="control-banner-info">
-            <span className="control-banner-icon">
-              {status.state === 'controlling' ? '⌨' : '🖥'}
-            </span>
-            <span>
-              {status.state === 'controlling'
-                ? <>Controlling <strong>{status.active_peer_id}</strong> — all input forwarded remotely</>
-                : <>Controlled by <strong>{status.active_peer_id}</strong></>
-              }
-            </span>
-          </div>
-          <button onClick={releaseControl} className="btn btn-danger btn-sm">
-            Release Control
-          </button>
-        </div>
-      )}
-
       {/* ─── Main Content ─── */}
-      {isPairing ? (
-        <div className="pairing-overlay">
-          <div className="pairing-card">
-            <div className="pairing-icon">🔗</div>
-            <h2>Pairing in Progress</h2>
-            <p>Securely connecting your devices over LAN or Tailscale</p>
+      
+      {/* ─── Home Screen View ─── */}
+      {screen === 'home' && (
+        <div className="screen-home-content">
+          {error && (
+            <div className="error-banner-mini">
+              <span>{error}</span>
+              <button onClick={() => setError(null)}>✕</button>
+            </div>
+          )}
+          
+          {disconnectNotif && (
+            <div className="info-banner-mini">
+              <span>{disconnectNotif}</span>
+              <button onClick={() => setDisconnectNotif(null)}>✕</button>
+            </div>
+          )}
 
-            {pairingSas ? (
-              <>
-                <div className="sas-display">
-                  {pairingPeerName && <div className="sas-label">Pairing with {pairingPeerName}</div>}
-                  <div className="sas-label">Verify this code on both machines</div>
-                  <div className="sas-code">{pairingSas}</div>
+          {missingPermissions && (
+            <div className="permission-warning-mini" onClick={openPermissions}>
+              ⚠️ System permissions missing. Click to open settings.
+            </div>
+          )}
+
+          {/* Connected state */}
+          {status && (status.state === 'controlling' || status.state === 'controlled-by') ? (
+            <div className="widget-connected-card">
+              <div className="widget-conn-info">
+                <span className="widget-conn-icon">
+                  {status.state === 'controlling' ? '⌨' : '🖥'}
+                </span>
+                <div className="widget-conn-text">
+                  <div className="widget-conn-title">
+                    {status.state === 'controlling' ? 'Controlling remote peer' : 'Controlled by remote peer'}
+                  </div>
+                  <div className="widget-conn-peer">
+                    {status.active_peer_id}
+                  </div>
                 </div>
-                <div className="sas-actions">
-                  <button onClick={confirmPairing} className="btn btn-success">
-                    ✓ Confirm &amp; Pair
+              </div>
+              <button onClick={releaseControl} className="btn btn-danger btn-block">
+                Disconnect
+              </button>
+            </div>
+          ) : (
+            /* Not Connected State */
+            <div className="widget-peers-list-container">
+              <div className="widget-section-header">
+                Available Paired Peers
+              </div>
+              
+              {availablePeers.length === 0 ? (
+                <div className="widget-empty-state">
+                  <div className="widget-empty-icon">🔌</div>
+                  {config?.peers && config.peers.length > 0 ? (
+                    <>
+                      <strong>All paired devices offline</strong>
+                      <span>Turn on flowkey on other devices to connect.</span>
+                    </>
+                  ) : (
+                    <>
+                      <strong>No paired devices yet</strong>
+                      <span>Click the '＋' button above to pair your first device.</span>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <ul className="widget-peer-list">
+                  {availablePeers.map((peer) => (
+                    <li key={peer.id} className="widget-peer-item">
+                      <div className="widget-peer-details">
+                        <div className="widget-peer-avatar">
+                          {peerInitial(peer.name)}
+                        </div>
+                        <span className="widget-peer-name" title={peer.name}>{peer.name}</span>
+                      </div>
+                      <button
+                        onClick={() => switchToPeer(peer.id)}
+                        className="btn btn-primary btn-sm"
+                      >
+                        Connect
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── Pairing Screen View ─── */}
+      {screen === 'pairing' && (
+        <div className="screen-pairing-content">
+          <div className="pairing-widget-card">
+            <div className="pairing-icon-small">🔗</div>
+            <h3>Device Pairing</h3>
+            <p className="pairing-desc">Setup secure pairing with a remote computer.</p>
+            
+            {pairingSas ? (
+              <div className="sas-widget-display">
+                {pairingPeerName && <div className="sas-peer-name">Pairing with {pairingPeerName}</div>}
+                <div className="sas-code-small">{pairingSas}</div>
+                <p className="sas-instruction">Verify this 6-digit code on both machines.</p>
+                <div className="sas-widget-actions">
+                  <button onClick={confirmPairing} className="btn btn-success btn-sm">
+                    ✓ Confirm
                   </button>
-                  <button onClick={cancelPairing} className="btn btn-secondary">
+                  <button onClick={cancelPairing} className="btn btn-secondary btn-sm">
                     Cancel
                   </button>
                 </div>
-              </>
+              </div>
             ) : (
-              <div className="pairing-waiting">
-                <div className="pairing-spinner" />
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 0 }}>
-                  Waiting for incoming connection...
-                </p>
-                <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: 6, marginBottom: 0 }}>
-                  This app is already discoverable while the window is open.
-                </p>
-                <button onClick={cancelPairing} className="btn btn-secondary" style={{ marginTop: 8 }}>
+              <div className="pairing-waiting-widget">
+                <div className="pairing-spinner-small" />
+                <span className="pairing-status-text">Discoverable as "{config?.node.name}"</span>
+                
+                {/* Fallback connection for discovered but not paired peers */}
+                {discoveredPeers.filter(p => !config?.peers.some(kp => kp.id === p.id)).length > 0 && (
+                  <div className="discovered-fallback-container">
+                    <div className="fallback-header">Discovered on LAN:</div>
+                    <ul className="fallback-list">
+                      {discoveredPeers
+                        .filter(p => !config?.peers.some(kp => kp.id === p.id))
+                        .map(peer => (
+                          <li key={peer.id} className="fallback-item">
+                            <span className="fallback-name">{peer.name}</span>
+                            <button
+                              onClick={() => connectToPeer(peer)}
+                              className="btn btn-primary btn-sm btn-xs"
+                            >
+                              Pair
+                            </button>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
+                
+                <button onClick={cancelPairing} className="btn btn-secondary btn-sm">
                   Cancel
                 </button>
               </div>
             )}
           </div>
         </div>
-      ) : (
-        <div className="content-grid">
-          {/* ─── Main Column ─── */}
-          <div className="content-main">
-            {/* Discovered Peers */}
-            <section className="glass-card">
-              <div className="card-header">
-                <h2>Discovered Devices</h2>
-                <button className="btn btn-ghost btn-sm" onClick={startPairingMode}>
-                  Ready to Pair
-                </button>
-              </div>
-              <div className="card-body">
-                {discoveredPeers.length === 0 ? (
-                  <div className="empty-state">
-                    <div className="empty-state-icon">🔍</div>
-                    <strong>No devices found yet</strong>
-                    <span>Open flowkey on the other computer. LAN and Tailscale devices should appear automatically.</span>
-                  </div>
-                ) : (
-                  <ul className="peer-list">
-                    {discoveredPeers.map((peer, i) => {
-                      const isConfigured = config?.peers?.some(p => p.id === peer.id) ?? false
-                      const isConnected = status?.connected_peer_ids?.includes(peer.id) ?? false
-                      const peerSubtitleRaw = isConfigured
-                        ? peer.id
-                        : (peer.hostname || peer.addrs[0] || peer.id).replace(/\.$/, '')
-                      const peerSubtitle = peerSubtitleRaw.length > 24
-                        ? `${peerSubtitleRaw.slice(0, 24)}…`
-                        : peerSubtitleRaw
+      )}
 
-                      return (
-                        <li key={peer.id} className={`peer-item ${isConfigured ? 'peer-item--configured' : ''}`} style={{ animationDelay: `${i * 0.05}s` }}>
-                          <div className="peer-item-left">
-                            <div className={isConnected ? 'peer-avatar peer-avatar--connected' : 'peer-avatar'}>
-                              {peerInitial(peer.name)}
-                            </div>
-                            <div className="peer-details">
-                              <span className="peer-name">{peer.name}</span>
-                              <span className="peer-id">{peerSubtitle}</span>
-                              {isConfigured && peer.addrs.length > 0 && (
-                                <span className="peer-addr">{peer.addrs[0]}</span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="peer-actions">
-                            {(peer.pairing_port && peer.addrs.length > 0 && !isConfigured && !isConnected) ? (
-                              <button
-                                onClick={() => connectToPeer(peer)}
-                                className="btn btn-primary btn-sm"
-                              >
-                                Connect
-                              </button>
-                            ) : isConnected ? (
-                              <span className="peer-status-tag peer-status-tag--connected">
-                                <span className="status-indicator" />
-                                Connected
-                              </span>
-                            ) : isConfigured ? (
-                              <span className="peer-status-tag peer-status-tag--known">
-                                <span className="status-indicator" />
-                                Configured
-                              </span>
-                            ) : (
-                              <span className="peer-status-tag peer-status-tag--online">
-                                <span className="status-indicator" />
-                                Online
-                              </span>
-                            )}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-            </section>
-
-            {/* Diagnostics & Input Debug */}
-            <section className="glass-card">
-              <div className="card-header">
-                <h2>Diagnostics</h2>
-              </div>
-              <div className="card-body">
-                <div className="diag-grid">
-                  <div className="diag-cell">
-                    <span className="diag-label">Input Capture</span>
-                    <span className={`diag-value ${status?.local_capture_enabled ? 'diag-value--active' : 'diag-value--inactive'}`}>
+      {/* ─── Diagnostics Screen View ─── */}
+      {screen === 'diagnostics' && (
+        <div className="screen-diagnostics-content">
+          <div className="diag-header-row">
+            <h3>Diagnostics & Settings</h3>
+          </div>
+          
+          <div className="diag-panels-grid">
+            {/* Left Panel: Logs & Diagnostic Status */}
+            <div className="diag-panel-left">
+              <div className="diag-subcard">
+                <h4>System Status</h4>
+                <div className="diag-mini-grid">
+                  <div className="diag-mini-cell">
+                    <span className="lbl">Capture</span>
+                    <span className={`val ${status?.local_capture_enabled ? 'active' : 'inactive'}`}>
                       {status?.local_capture_enabled ? 'Active' : 'Inactive'}
                     </span>
                   </div>
-                  <div className="diag-cell">
-                    <span className="diag-label">Injection Backend</span>
-                    <span className="diag-value">{status?.input_injection_backend || '—'}</span>
+                  <div className="diag-mini-cell">
+                    <span className="lbl">Backend</span>
+                    <span className="val">{status?.input_injection_backend || '—'}</span>
                   </div>
                 </div>
                 {status && status.notes.length > 0 && (
-                  <div className="diag-notes">
+                  <div className="diag-notes-box">
                     {status.notes.map((note, i) => (
-                      <div key={i} className="diag-note">{note}</div>
+                      <div key={i} className="diag-note-item">{note}</div>
                     ))}
                   </div>
                 )}
               </div>
-            </section>
 
-            {/* Input Debug */}
-            <section className="glass-card">
-              <div className="card-header">
-                <h2>Input Debug</h2>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => setInputDebugEvents([])}
-                >
-                  Clear
-                </button>
+              <div className="diag-subcard debug-subcard">
+                <div className="debug-header">
+                  <h4>Keyboard Events Feed</h4>
+                  <button
+                    className="btn btn-ghost btn-sm btn-xs"
+                    onClick={() => setInputDebugEvents([])}
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="debug-feed-box">
+                  {inputDebugEvents.length === 0 ? (
+                    <div className="debug-empty-small">No logs recorded yet. Use keys to test capture.</div>
+                  ) : (
+                    <div className="debug-feed-list">
+                      {inputDebugEvents.map((item, i) => (
+                        <div key={`${item.timestamp_ms}-${i}`} className="debug-row">
+                          <span className="kind">{item.kind}</span>
+                          <span className="detail">{item.detail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="card-body" style={{ padding: '8px 10px 10px' }}>
-                {inputDebugEvents.length === 0 ? (
-                  <div className="debug-empty">No keyboard debug events in this session.</div>
-                ) : (
-                  <div className="debug-feed">
-                    {inputDebugEvents.map((item, i) => (
-                      <div key={`${item.timestamp_ms}-${i}`} className="debug-line">
-                        <span className="debug-kind">{item.kind}</span>
-                        <span className="debug-detail">{item.detail}</span>
-                      </div>
-                    ))}
+            </div>
+
+            {/* Right Panel: Settings & Trusted Peers list */}
+            <div className="diag-panel-right">
+              <div className="diag-subcard">
+                <h4>Preferences</h4>
+                <div className="preferences-list">
+                  <div className="pref-row">
+                    <div className="pref-info">
+                      <span className="pref-lbl">Launch at login</span>
+                      <span className="pref-desc">Auto-start flowkey at sign in</span>
+                    </div>
+                    <button
+                      onClick={toggleAutostart}
+                      className={`toggle toggle-sm ${autostartEnabled ? 'active' : ''}`}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
                   </div>
-                )}
+                  <div className="pref-row">
+                    <div className="pref-info">
+                      <span className="pref-lbl">Remote control</span>
+                      <span className="pref-desc">Allow peers to switch without prompt</span>
+                    </div>
+                    <button
+                      onClick={toggleRemoteControl}
+                      className={`toggle toggle-sm ${config?.node.accept_remote_control ? 'active' : ''}`}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </div>
+                </div>
               </div>
-            </section>
-          </div>
 
-          {/* ─── Side Column ─── */}
-          <div className="content-side">
-            {/* Trusted Peers */}
-            <section className="glass-card">
-              <div className="card-header">
-                <h2>Trusted Peers</h2>
-              </div>
-              <div className="card-body" style={{ padding: '10px 12px 12px' }}>
+              <div className="diag-subcard peers-subcard">
+                <h4>Paired Devices ({config?.peers.length || 0})</h4>
                 {config?.peers && config.peers.length > 0 ? (
-                  <ul className="trusted-list">
-                    {config.peers.map((peer, i) => {
-                      const isConnected = status?.connected_peer_ids.includes(peer.id) ?? false
-                      const isControlling = status?.state === 'controlling' && status.active_peer_id === peer.id
+                  <ul className="paired-devices-list">
+                    {config.peers.map((peer) => {
+                      const isOnline = status?.connected_peer_ids.includes(peer.id) ?? false
                       return (
-                        <li key={peer.id} className="trusted-item" style={{ animationDelay: `${i * 0.04}s` }}>
-                          <div className="trusted-item-left">
-                            <div
-                              className="trusted-avatar"
-                              style={{
-                                background: isConnected
-                                  ? 'linear-gradient(135deg, var(--accent-dim), var(--blue))'
-                                  : 'var(--bg-hover)',
-                                opacity: isConnected ? 1 : 0.5,
-                              }}
-                            >
-                              {peerInitial(peer.name)}
-                            </div>
-                            <div className="trusted-item-info">
-                              <span className="trusted-item-name">{peer.name}</span>
-                              <span className="trusted-item-id">{peer.id.slice(0, 12)}…</span>
-                            </div>
-                            <span className={`trusted-item-conn ${isConnected ? 'trusted-item-conn--connected' : 'trusted-item-conn--offline'}`}>
-                              {isConnected ? 'Online' : 'Offline'}
-                            </span>
+                        <li key={peer.id} className="paired-device-item">
+                          <div className="paired-device-details">
+                            <span className="paired-name">{peer.name}</span>
+                            <span className="paired-id">{peer.id.slice(0, 8)}…</span>
                           </div>
-                          <div className="trusted-item-actions">
-                            {isControlling ? (
-                              <button onClick={releaseControl} className="btn btn-danger btn-sm">
-                                Release
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => switchToPeer(peer.id)}
-                                className="btn btn-primary btn-sm"
-                                disabled={!isConnected}
-                                title={isConnected ? `Control ${peer.name}` : 'Peer is offline'}
-                              >
-                                Control
-                              </button>
-                            )}
+                          <div className="paired-actions">
+                            <span className={`online-indicator ${isOnline ? 'online' : 'offline'}`} />
                             <button
                               onClick={() => removePeer(peer.id)}
-                              className="btn btn-ghost btn-sm"
-                              style={{ color: 'var(--text-muted)' }}
+                              className="btn-remove"
+                              title="Unpair device"
                             >
                               ✕
                             </button>
@@ -627,62 +662,9 @@ function App() {
                     })}
                   </ul>
                 ) : (
-                  <div className="empty-state" style={{ padding: '20px 12px' }}>
-                    <div className="empty-state-icon" style={{ fontSize: '1.5rem' }}>🤝</div>
-                    <strong>No trusted peers yet</strong>
-                    <span>Pair with another device to get started</span>
-                  </div>
+                  <div className="debug-empty-small">No paired devices.</div>
                 )}
               </div>
-            </section>
-
-            {/* Settings */}
-            <section className="glass-card">
-              <div className="card-header">
-                <h2>Settings</h2>
-              </div>
-              <div className="card-body" style={{ padding: '10px 0' }}>
-                <div className="settings-group">
-                  <div className="setting-row" style={{ padding: '10px 16px' }}>
-                    <div className="setting-label-group">
-                      <span className="setting-label">Launch at login</span>
-                      <span className="setting-desc">Auto-start when you sign in</span>
-                    </div>
-                    <button
-                      onClick={toggleAutostart}
-                      className={`toggle ${autostartEnabled ? 'active' : ''}`}
-                      aria-label="Toggle launch at login"
-                    >
-                      <span className="toggle-knob" />
-                    </button>
-                  </div>
-                  <div className="setting-row" style={{ padding: '10px 16px' }}>
-                    <div className="setting-label-group">
-                      <span className="setting-label">Remote control mode</span>
-                      <span className="setting-desc">Allow trusted peers to control without prompt</span>
-                    </div>
-                    <button
-                      onClick={toggleRemoteControl}
-                      className={`toggle ${config?.node.accept_remote_control ? 'active' : ''}`}
-                      aria-label="Toggle remote control mode"
-                    >
-                      <span className="toggle-knob" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* About / Status Footer */}
-            <div style={{
-              padding: '8px 4px',
-              textAlign: 'center',
-              fontSize: '0.72rem',
-              color: 'var(--text-muted)',
-              letterSpacing: '0.02em',
-            }}>
-              flowkey &middot; LAN keyboard &amp; mouse sharing
-              {config && <span> &middot; v0.1.0</span>}
             </div>
           </div>
         </div>
