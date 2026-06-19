@@ -6,10 +6,12 @@
 use flowkey_config::Config;
 use flowkey_daemon::{spawn_supervised, DaemonHandle};
 use flowkey_net::discovery::{
-    discover_tailscale_peers, resolve_hostname_to_addrs, DiscoveredPeer,
-    DiscoveryAdvertisement, DEFAULT_PAIRING_PORT,
+    discover_tailscale_peers, resolve_hostname_to_addrs, DiscoveredPeer, DiscoveryAdvertisement,
+    DEFAULT_PAIRING_PORT,
 };
-use flowkey_net::pairing::{accept_pairing_listener, initiate_pairing_client, PairingProposal};
+use flowkey_net::pairing::{
+    accept_pairing_listener, initiate_pairing_client_to_target, PairingProposal,
+};
 #[cfg(target_os = "macos")]
 use flowkey_platform_macos::control_ipc::connect_to_control_socket;
 #[cfg(target_os = "windows")]
@@ -258,13 +260,14 @@ async fn enter_pairing_mode(_state: State<'_, AppState>) -> Result<String, Strin
 #[tauri::command]
 async fn connect_to_peer(peer_addr: String, state: State<'_, AppState>) -> Result<String, String> {
     let config = Config::load_or_default().map_err(|e| e.to_string())?;
-    let addr = peer_addr
-        .parse::<std::net::SocketAddr>()
-        .map_err(|e| e.to_string())?;
-
-    let proposal = initiate_pairing_client(config, addr)
-        .await
-        .map_err(|e| e.to_string())?;
+    let proposal = initiate_pairing_client_to_target(
+        config,
+        &peer_addr,
+        DEFAULT_PAIRING_PORT,
+        Duration::from_secs(5),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let sas_code = proposal.sas_code.clone();
 
     let mut active = state.active_pairing.lock().unwrap();
@@ -283,10 +286,11 @@ async fn confirm_pairing(state: State<'_, AppState>) -> Result<(), String> {
     };
 
     let mut config = Config::load_or_default().map_err(|e| e.to_string())?;
+    let preferred_addr = proposal.preferred_peer_addr();
     config.upsert_peer(flowkey_config::PeerConfig {
         id: proposal.peer.id,
         name: proposal.peer.name,
-        addr: proposal.peer.listen_addr,
+        addr: preferred_addr,
         public_key: proposal.peer.public_key,
         trusted: true,
     });

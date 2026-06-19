@@ -45,10 +45,10 @@ The daemon must be run from an **interactive signed-in desktop session**.
 
 ### 2. Windows Firewall
 By default, Windows Firewall blocks incoming TCP connections.
-- You must allow incoming traffic on port **48571**.
+- You must allow incoming traffic on daemon port **48571** and pairing port **48572**.
 - Run this in an Administrator PowerShell to add the rule:
   ```powershell
-  New-NetFirewallRule -DisplayName "flowkey" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 48571
+  New-NetFirewallRule -DisplayName "flowkey" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 48571,48572
   ```
 
 ### 3. UIPI (User Interface Privilege Isolation)

@@ -29,7 +29,7 @@ shell.Run deleteCommand, 0, True
 
 If mode <> "ALL" Then
   Dim addCommand
-  addCommand = "cmd.exe /c netsh advfirewall firewall add rule name=""flowkey"" dir=in action=allow protocol=TCP localport=48571"
+  addCommand = "cmd.exe /c netsh advfirewall firewall add rule name=""flowkey"" dir=in action=allow protocol=TCP localport=48571,48572"
   If shell.Run(addCommand, 0, True) <> 0 Then
     Err.Raise vbObjectError + 1, "FlowkeyFirewallRule", "failed to add the flowkey firewall rule"
   End If

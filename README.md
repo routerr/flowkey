@@ -127,7 +127,7 @@ Release outputs (produced by the packaging scripts) are currently:
 - Windows: `.msi` installer plus `.zip` bundle with `install.ps1`, each with SHA-256 checksum
 
 Windows installers are produced by the Tauri bundle path, and the MSI includes the
-Firewall rule needed for TCP port `48571`.
+firewall rules needed for daemon TCP port `48571` and pairing TCP port `48572`.
 
 ### Run Help
 
@@ -250,13 +250,13 @@ What is still not done yet:
 
 - native input injection still depends on the local OS permission model
 - Windows must run the daemon from the signed-in desktop session, not via SSH or `Start-Process`
-- Windows Firewall may need an inbound rule for TCP port `48571`
+- Windows Firewall may need inbound rules for TCP ports `48571` and `48572`
 - macOS still requires Accessibility and Input Monitoring permission grants for full operation
 
 ## Platform Notes
 
 - Windows: start `flky daemon` from the interactive desktop session. If injection still fails, run it at the same privilege level as the target apps.
-- Windows: if peers cannot connect, open TCP port `48571` in Windows Firewall.
+- Windows: if peers cannot connect or pair, open TCP ports `48571` and `48572` in Windows Firewall.
 - Windows: the signed release binary needs to live under `C:\Program Files\...` for `uiAccess=true` to take effect. Unsigned debug builds still run, but Windows ignores `uiAccess` until the binary is signed and installed in a trusted location.
 - macOS: grant Accessibility in `System Settings > Privacy & Security > Accessibility` and Input Monitoring in `System Settings > Privacy & Security > Input Monitoring`.
 

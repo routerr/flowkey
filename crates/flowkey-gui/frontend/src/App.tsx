@@ -50,6 +50,8 @@ function App() {
   const [discoveredPeers, setDiscoveredPeers] = useState<DiscoveredPeer[]>([])
   const [pairingSas, setPairingSas] = useState<string | null>(null)
   const [pairingPeerName, setPairingPeerName] = useState<string | null>(null)
+  const [manualPairingAddress, setManualPairingAddress] = useState('')
+  const [pairingConnectionPending, setPairingConnectionPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [disconnectNotif, setDisconnectNotif] = useState<string | null>(null)
   const [isPairing, setIsPairing] = useState(false)
@@ -66,7 +68,7 @@ function App() {
     if (nextScreen === 'home') {
       await resizeWindow(360, 300)
     } else if (nextScreen === 'pairing') {
-      await resizeWindow(380, 420)
+      await resizeWindow(380, 500)
     } else if (nextScreen === 'diagnostics') {
       await resizeWindow(680, 580)
     }
@@ -200,25 +202,40 @@ function App() {
     }
   }
 
+  async function connectToTarget(target: string, peerName: string | null = null) {
+    const trimmedTarget = target.trim()
+    if (!trimmedTarget) {
+      setError('Enter the remote computer\'s IP address or hostname')
+      return
+    }
+
+    setPairingConnectionPending(true)
+    setError(null)
+    try {
+      const sas = await invoke<string>('connect_to_peer', { peerAddr: trimmedTarget })
+      setPairingSas(sas)
+      setPairingPeerName(peerName)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setPairingConnectionPending(false)
+    }
+  }
+
   async function connectToPeer(peer: DiscoveredPeer) {
     if (!peer.pairing_port || peer.addrs.length === 0) {
       setError('Peer has no reachable pairing address')
       return
     }
 
-    const ip = peer.addrs[0].split(':')[0]
-    const addr = `${ip}:${peer.pairing_port}`
+    const discoveredAddress = peer.addrs[0]
+    const closingBracket = discoveredAddress.indexOf(']')
+    const host = discoveredAddress.startsWith('[') && closingBracket > 0
+      ? discoveredAddress.slice(0, closingBracket + 1)
+      : discoveredAddress.split(':')[0]
 
     setIsPairing(true)
-    setError(null)
-    try {
-      const sas = await invoke<string>('connect_to_peer', { peerAddr: addr })
-      setPairingSas(sas)
-      setPairingPeerName(peer.name)
-    } catch (e) {
-      setError(String(e))
-      setIsPairing(false)
-    }
+    await connectToTarget(`${host}:${peer.pairing_port}`, peer.name)
   }
 
   async function confirmPairing() {
@@ -511,6 +528,37 @@ function App() {
               <div className="pairing-waiting-widget">
                 <div className="pairing-spinner-small" />
                 <span className="pairing-status-text">Discoverable as "{config?.node.name}"</span>
+
+                <form
+                  className="manual-pairing-form"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    connectToTarget(manualPairingAddress)
+                  }}
+                >
+                  <label htmlFor="manual-pairing-address">Connect by address</label>
+                  <div className="manual-pairing-row">
+                    <input
+                      id="manual-pairing-address"
+                      type="text"
+                      value={manualPairingAddress}
+                      onChange={(e) => setManualPairingAddress(e.target.value)}
+                      placeholder="192.168.1.102"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      disabled={pairingConnectionPending}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-sm"
+                      disabled={pairingConnectionPending || !manualPairingAddress.trim()}
+                    >
+                      {pairingConnectionPending ? 'Connecting…' : 'Pair'}
+                    </button>
+                  </div>
+                  <span>Uses pairing port 48572 when no port is entered.</span>
+                </form>
                 
                 {/* Fallback connection for discovered but not paired peers */}
                 {discoveredPeers.filter(p => !config?.peers.some(kp => kp.id === p.id)).length > 0 && (

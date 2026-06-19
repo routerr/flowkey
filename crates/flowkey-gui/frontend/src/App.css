@@ -1393,6 +1393,54 @@
   color: var(--text-secondary);
 }
 
+.manual-pairing-form {
+  width: 100%;
+  text-align: left;
+}
+
+.manual-pairing-form label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.manual-pairing-row {
+  display: flex;
+  gap: 6px;
+}
+
+.manual-pairing-row input {
+  min-width: 0;
+  flex: 1;
+  padding: 7px 9px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-deepest);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  outline: none;
+  transition: var(--transition-fast);
+}
+
+.manual-pairing-row input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.manual-pairing-row input::placeholder {
+  color: var(--text-muted);
+}
+
+.manual-pairing-form > span {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
 .discovered-fallback-container {
   width: 100%;
   background: var(--bg-glass);
