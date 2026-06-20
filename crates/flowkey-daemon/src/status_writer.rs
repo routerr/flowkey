@@ -39,7 +39,10 @@ pub(crate) fn advertise_discovery_service(
             {
                 match runtime.lock() {
                     Ok(mut runtime) => {
-                        push_runtime_note(&mut runtime, format!("LAN discovery unavailable: {error}"));
+                        push_runtime_note(
+                            &mut runtime,
+                            format!("LAN discovery unavailable: {error}"),
+                        );
                     }
                     Err(e) => {
                         error!("daemon runtime mutex poisoned: {}", e);

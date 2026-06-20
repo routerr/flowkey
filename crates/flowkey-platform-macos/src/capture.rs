@@ -461,7 +461,7 @@ fn convert_cg_event(
             let key = key_from_code(code);
             let is_set = key_flag_is_set(code, current_flags);
             *last_flags = current_flags;
-            
+
             // CapsLock (57) and Fn/Globe (63) only emit an event when their state toggles.
             // This means one physical press = one FlagsChanged event.
             // We simulate a full physical click (Press + Release) so the remote OS sees a complete key stroke.
@@ -516,12 +516,12 @@ fn convert_cg_event(
 /// what other flag bits (e.g. `CGEventFlagNonCoalesced`) happen to be set.
 fn key_flag_is_set(code: u16, flags: CGEventFlags) -> bool {
     let mask = match code {
-        56 | 60 => CGEventFlags::CGEventFlagShift,       // ShiftLeft / ShiftRight
-        58 | 61 => CGEventFlags::CGEventFlagAlternate,   // Option left / Option right
-        59 | 62 => CGEventFlags::CGEventFlagControl,     // ControlLeft / ControlRight
-        55 | 54 => CGEventFlags::CGEventFlagCommand,     // Command left / Command right
-        57 => CGEventFlags::CGEventFlagAlphaShift,       // CapsLock
-        63 => CGEventFlags::CGEventFlagSecondaryFn,      // Fn
+        56 | 60 => CGEventFlags::CGEventFlagShift, // ShiftLeft / ShiftRight
+        58 | 61 => CGEventFlags::CGEventFlagAlternate, // Option left / Option right
+        59 | 62 => CGEventFlags::CGEventFlagControl, // ControlLeft / ControlRight
+        55 | 54 => CGEventFlags::CGEventFlagCommand, // Command left / Command right
+        57 => CGEventFlags::CGEventFlagAlphaShift, // CapsLock
+        63 => CGEventFlags::CGEventFlagSecondaryFn, // Fn
         _ => return false, // Unknown modifier key; treat as release to avoid stuck keys
     };
     flags.contains(mask)

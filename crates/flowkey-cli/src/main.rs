@@ -4,12 +4,12 @@ use flowkey_config::{Config, PeerConfig};
 use flowkey_core::{DaemonCommand, DaemonStatus};
 use flowkey_crypto::{HandshakeOffer, NodeIdentity};
 use flowkey_daemon::run_daemon;
-use std::path::Path;
-use std::time::Duration;
 #[cfg(target_os = "macos")]
 use flowkey_platform_macos::control_ipc::connect_to_control_socket;
 #[cfg(target_os = "windows")]
 use flowkey_platform_windows::control_ipc::connect_to_control_pipe;
+use std::path::Path;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing::warn;

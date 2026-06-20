@@ -350,16 +350,7 @@ function App() {
       <header className="app-header">
         <div className="app-header-left">
           <div className="app-logo">
-            <svg width="18" height="18" fill="none" viewBox="0 0 48 48" className="app-logo-icon">
-              <rect width="48" height="48" rx="10" fill="url(#g)" />
-              <path d="M 15,9 L 35.5,30 L 25,30 L 29.5,41.5 L 25,43 L 20.5,32 L 15,37 Z" fill="white" />
-              <defs>
-                <linearGradient id="g" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
-                  <stop stop-color="#a78bfa"/>
-                  <stop offset="1" stop-color="#6366f1"/>
-                </linearGradient>
-              </defs>
-            </svg>
+            <img src="/favicon.svg" alt="" className="app-logo-icon" />
             <span className="app-logo-text">flow<span>key</span></span>
           </div>
           {screen === 'home' && config && (

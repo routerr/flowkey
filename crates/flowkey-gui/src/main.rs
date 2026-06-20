@@ -56,12 +56,24 @@ fn peer_host_keys(addrs: &[String], hostname: &str) -> std::collections::HashSet
             keys.insert(sa.ip().to_string());
         } else if let Some((host, port)) = addr.rsplit_once(':') {
             if port.parse::<u16>().is_ok() {
-                keys.insert(host.trim_matches(&['[', ']'][..]).trim_end_matches('.').to_ascii_lowercase());
+                keys.insert(
+                    host.trim_matches(&['[', ']'][..])
+                        .trim_end_matches('.')
+                        .to_ascii_lowercase(),
+                );
             } else {
-                keys.insert(addr.trim_matches(&['[', ']'][..]).trim_end_matches('.').to_ascii_lowercase());
+                keys.insert(
+                    addr.trim_matches(&['[', ']'][..])
+                        .trim_end_matches('.')
+                        .to_ascii_lowercase(),
+                );
             }
         } else {
-            keys.insert(addr.trim_matches(&['[', ']'][..]).trim_end_matches('.').to_ascii_lowercase());
+            keys.insert(
+                addr.trim_matches(&['[', ']'][..])
+                    .trim_end_matches('.')
+                    .to_ascii_lowercase(),
+            );
         }
     }
     if !hostname.is_empty() {
@@ -76,7 +88,8 @@ async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
     let local_id = config.node.id.clone();
 
     // 1. mDNS discovery (works for same-subnet)
-    let mut peers = match flowkey_net::discovery::discover(Duration::from_secs(2), Some(&local_id)) {
+    let mut peers = match flowkey_net::discovery::discover(Duration::from_secs(2), Some(&local_id))
+    {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "mDNS discovery failed");
@@ -121,10 +134,14 @@ async fn get_discovered_peers() -> Result<Vec<DiscoveredPeer>, String> {
             }
             Err(_) => {
                 // It's a hostname — extract host and port
-                let host = peer.addr.rsplit_once(':')
+                let host = peer
+                    .addr
+                    .rsplit_once(':')
                     .map(|(h, _)| h)
                     .unwrap_or(&peer.addr);
-                let port = peer.addr.rsplit_once(':')
+                let port = peer
+                    .addr
+                    .rsplit_once(':')
                     .and_then(|(_, p)| p.parse().ok())
                     .unwrap_or(default_port);
                 let resolved = resolve_hostname_to_addrs(host, port);
@@ -244,10 +261,14 @@ async fn open_permissions() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn set_accept_remote_control(enabled: bool) -> Result<(), String> {
+async fn set_accept_remote_control(
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let mut config = Config::load_or_create().map_err(|e| e.to_string())?;
     config.node.accept_remote_control = enabled;
-    config.save().map_err(|e| e.to_string())
+    config.save().map_err(|e| e.to_string())?;
+    restart_embedded_daemon(&*state).await
 }
 
 #[tauri::command]
@@ -285,17 +306,11 @@ async fn confirm_pairing(state: State<'_, AppState>) -> Result<(), String> {
             .ok_or_else(|| "no active pairing session".to_string())?
     };
 
-    let mut config = Config::load_or_default().map_err(|e| e.to_string())?;
-    let preferred_addr = proposal.preferred_peer_addr();
-    config.upsert_peer(flowkey_config::PeerConfig {
-        id: proposal.peer.id,
-        name: proposal.peer.name,
-        addr: preferred_addr,
-        public_key: proposal.peer.public_key,
-        trusted: true,
-    });
+    let mut config = Config::load_or_create().map_err(|e| e.to_string())?;
+    upsert_pairing_peer(&mut config, proposal);
 
     config.save().map_err(|e| e.to_string())?;
+    restart_embedded_daemon(&*state).await?;
     Ok(())
 }
 
@@ -307,11 +322,11 @@ async fn cancel_pairing(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn remove_peer(peer_id: String) -> Result<(), String> {
+async fn remove_peer(peer_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let mut config = Config::load_or_default().map_err(|e| e.to_string())?;
     config.peers.retain(|p| p.id != peer_id);
     config.save().map_err(|e| e.to_string())?;
-    Ok(())
+    restart_embedded_daemon(&*state).await
 }
 
 #[tauri::command]
@@ -404,6 +419,17 @@ async fn release_control() -> Result<(), String> {
     }
 }
 
+fn upsert_pairing_peer(config: &mut Config, proposal: PairingProposal) {
+    let preferred_addr = proposal.preferred_peer_addr();
+    config.upsert_peer(flowkey_config::PeerConfig {
+        id: proposal.peer.id,
+        name: proposal.peer.name,
+        addr: preferred_addr,
+        public_key: proposal.peer.public_key,
+        trusted: true,
+    });
+}
+
 fn request_daemon_shutdown(app: tauri::AppHandle) {
     let handle = app
         .state::<AppState>()
@@ -419,6 +445,95 @@ fn request_daemon_shutdown(app: tauri::AppHandle) {
         }
         app.exit(0);
     });
+}
+
+async fn restart_embedded_daemon(state: &AppState) -> Result<(), String> {
+    tracing::info!("restarting embedded daemon to apply updated config");
+
+    let previous = {
+        let mut daemon = state.daemon.lock().unwrap();
+        daemon.take()
+    };
+
+    if let Some(handle) = previous {
+        handle.shutdown().await;
+    }
+
+    let config = Config::load_or_create().map_err(|e| e.to_string())?;
+    let handle = Arc::new(spawn_supervised(config));
+    let mut daemon = state.daemon.lock().unwrap();
+    *daemon = Some(handle);
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flowkey_config::{CaptureMode, NodeConfig, SwitchConfig};
+    use flowkey_net::pairing::PairingIdentity;
+
+    fn test_config() -> Config {
+        Config {
+            node: NodeConfig {
+                id: "local-node".to_string(),
+                name: "Local Node".to_string(),
+                listen_addr: "127.0.0.1:48571".to_string(),
+                advertised_addr: None,
+                accept_remote_control: true,
+                private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+                public_key: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
+            },
+            switch: SwitchConfig {
+                hotkey: "Ctrl+Alt+Shift+K".to_string(),
+                capture_mode: CaptureMode::Exclusive,
+                input_coalesce_window_ms: flowkey_config::DEFAULT_INPUT_COALESCE_WINDOW_MS,
+            },
+            peers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn pairing_confirmation_persists_peer_with_observed_daemon_route() {
+        let mut config = test_config();
+        let proposal = PairingProposal {
+            peer: PairingIdentity {
+                id: "remote-node".to_string(),
+                name: "Remote Node".to_string(),
+                public_key: "remote-public-key".to_string(),
+                listen_addr: "10.0.0.8:48571".to_string(),
+            },
+            sas_code: "123456".to_string(),
+            observed_addr: "127.0.0.1:48572".parse().unwrap(),
+        };
+
+        upsert_pairing_peer(&mut config, proposal);
+
+        assert_eq!(config.peers.len(), 1);
+        assert_eq!(config.peers[0].id, "remote-node");
+        assert_eq!(config.peers[0].addr, "127.0.0.1:48571");
+        assert!(config.peers[0].trusted);
+        assert_eq!(config.peers[0].name, "Remote Node");
+        assert_eq!(config.peers[0].public_key, "remote-public-key");
+
+        let updated_proposal = PairingProposal {
+            peer: PairingIdentity {
+                id: "remote-node".to_string(),
+                name: "Remote Node Renamed".to_string(),
+                public_key: "updated-public-key".to_string(),
+                listen_addr: "10.0.0.8:48571".to_string(),
+            },
+            sas_code: "654321".to_string(),
+            observed_addr: "127.0.0.2:48572".parse().unwrap(),
+        };
+
+        upsert_pairing_peer(&mut config, updated_proposal);
+
+        assert_eq!(config.peers.len(), 1);
+        assert_eq!(config.peers[0].name, "Remote Node Renamed");
+        assert_eq!(config.peers[0].addr, "127.0.0.2:48571");
+        assert_eq!(config.peers[0].public_key, "updated-public-key");
+    }
 }
 
 fn init_tracing() {
@@ -468,7 +583,10 @@ fn set_activation_policy(policy: tauri::ActivationPolicy) {
             return;
         }
         let shared_app_sel_ptr = sel_registerName(shared_app_sel.as_ptr());
-        let msg_send_shared_app: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+        let msg_send_shared_app: unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
         let app = msg_send_shared_app(ns_app_class, shared_app_sel_ptr);
         if app.is_null() {
             return;
@@ -482,13 +600,21 @@ fn set_activation_policy(policy: tauri::ActivationPolicy) {
         };
 
         let set_policy_sel_ptr = sel_registerName(set_policy_sel.as_ptr());
-        let msg_send_set_policy: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+        let msg_send_set_policy: unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            isize,
+        ) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
         msg_send_set_policy(app, set_policy_sel_ptr, policy_val);
 
         if is_regular {
             let activate_sel = std::ffi::CString::new("activateIgnoringOtherApps:").unwrap();
             let activate_sel_ptr = sel_registerName(activate_sel.as_ptr());
-            let msg_send_activate: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, i8) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+            let msg_send_activate: unsafe extern "C" fn(
+                *mut std::ffi::c_void,
+                *mut std::ffi::c_void,
+                i8,
+            ) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
             msg_send_activate(app, activate_sel_ptr, 1);
         }
     }

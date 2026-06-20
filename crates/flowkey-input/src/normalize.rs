@@ -198,7 +198,13 @@ mod tests {
             Some("ControlRight")
         );
         assert_eq!(normalize_button(rdev::Button::Middle), MouseButton::Middle);
-        assert_eq!(normalize_button(rdev::Button::Unknown(2)), MouseButton::Middle);
-        assert_eq!(normalize_button(rdev::Button::Unknown(3)), MouseButton::Middle);
+        assert_eq!(
+            normalize_button(rdev::Button::Unknown(2)),
+            MouseButton::Middle
+        );
+        assert_eq!(
+            normalize_button(rdev::Button::Unknown(3)),
+            MouseButton::Middle
+        );
     }
 }

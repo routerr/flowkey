@@ -120,21 +120,17 @@ impl flowkey_net::connection::SessionStateCallback for DaemonSessionCallback {
             return;
         }
 
-        let _ = self.apply_state_transition_and_log(
-            peer_id,
-            request_id,
-            "remote-switch",
-            |runtime| runtime.mark_controlled_by(peer_id),
-        );
+        let _ =
+            self.apply_state_transition_and_log(peer_id, request_id, "remote-switch", |runtime| {
+                runtime.mark_controlled_by(peer_id)
+            });
     }
 
     fn on_remote_release(&self, peer_id: &str, request_id: &str) {
-        let _ = self.apply_state_transition_and_log(
-            peer_id,
-            request_id,
-            "remote-release",
-            |runtime| runtime.release_control(),
-        );
+        let _ =
+            self.apply_state_transition_and_log(peer_id, request_id, "remote-release", |runtime| {
+                runtime.release_control()
+            });
     }
 }
 
@@ -457,7 +453,9 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id).expect("should authenticate");
+            runtime
+                .mark_authenticated(peer_id)
+                .expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
         session_senders
@@ -545,7 +543,9 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id).expect("should authenticate");
+            runtime
+                .mark_authenticated(peer_id)
+                .expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
         session_senders
@@ -624,8 +624,12 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id).expect("should authenticate");
-            runtime.mark_authenticated(spare_peer_id).expect("should authenticate");
+            runtime
+                .mark_authenticated(peer_id)
+                .expect("should authenticate");
+            runtime
+                .mark_authenticated(spare_peer_id)
+                .expect("should authenticate");
             runtime
                 .toggle_controller()
                 .expect("should enter control for the active peer");
@@ -696,8 +700,12 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated("controlled-pc").expect("should authenticate");
-            runtime.toggle_controller().expect("should enter Controlling");
+            runtime
+                .mark_authenticated("controlled-pc")
+                .expect("should authenticate");
+            runtime
+                .toggle_controller()
+                .expect("should enter Controlling");
         }
 
         callback.on_remote_release("controlled-pc", "req-release-1");
@@ -739,7 +747,9 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated("office-pc").expect("should authenticate");
+            runtime
+                .mark_authenticated("office-pc")
+                .expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
 

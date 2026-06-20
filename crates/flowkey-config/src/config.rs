@@ -333,7 +333,10 @@ impl Config {
         override_addr: Option<&str>,
     ) -> Result<String> {
         if let Some(override_addr) = override_addr.or(self.node.advertised_addr.as_deref()) {
-            return advertised_listen_addr_with_override(&self.node.listen_addr, Some(override_addr));
+            return advertised_listen_addr_with_override(
+                &self.node.listen_addr,
+                Some(override_addr),
+            );
         }
 
         let socket_addr = self
@@ -404,7 +407,13 @@ impl Default for Config {
 
 fn detect_hostname() -> Option<String> {
     detect_tailscale_dns_name()
-        .map(|dns| dns.trim_end_matches('.').split('.').next().unwrap_or("local-node").to_string())
+        .map(|dns| {
+            dns.trim_end_matches('.')
+                .split('.')
+                .next()
+                .unwrap_or("local-node")
+                .to_string()
+        })
         .filter(|value| !value.trim().is_empty())
         .or_else(detect_platform_hostname)
         .or_else(|| {
@@ -486,10 +495,7 @@ fn detect_tailscale_dns_name() -> Option<String> {
 
 fn detect_tailscale_ipv4() -> Option<IpAddr> {
     let json = detect_tailscale_status_json()?;
-    let ips = json
-        .get("Self")?
-        .get("TailscaleIPs")?
-        .as_array()?;
+    let ips = json.get("Self")?.get("TailscaleIPs")?.as_array()?;
     for ip in ips {
         let ip = ip.as_str()?;
         if ip.contains(':') {

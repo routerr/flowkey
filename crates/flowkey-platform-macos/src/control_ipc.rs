@@ -12,5 +12,3 @@ pub async fn connect_to_control_socket(socket_path: &Path) -> Option<UnixStream>
     }
     UnixStream::connect(socket_path).await.ok()
 }
-
-

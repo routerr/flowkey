@@ -297,7 +297,10 @@ fn peer_from_resolved_service(service: &mdns_sd::ResolvedService) -> Option<Disc
     }
 
     // Try DNS resolution from the advertised hostname (for Tailscale Magic DNS)
-    if let Some(hostname) = service.txt_properties.get_property_val_str(PROPERTY_HOSTNAME) {
+    if let Some(hostname) = service
+        .txt_properties
+        .get_property_val_str(PROPERTY_HOSTNAME)
+    {
         let dns_addrs = resolve_hostname_to_addrs(hostname, service.port);
         for addr in dns_addrs {
             if !addrs.contains(&addr) {
@@ -441,7 +444,10 @@ pub fn collect_peer_candidates(
     }
 
     // Try short hostname with Tailscale suffixes (even if host_str is not clearly a Tailscale name)
-    let short = host_str.trim_end_matches(".local").trim_end_matches(".ts.net").trim_end_matches(".tailscale.ts.net");
+    let short = host_str
+        .trim_end_matches(".local")
+        .trim_end_matches(".ts.net")
+        .trim_end_matches(".tailscale.ts.net");
     for suffix in [".ts.net", ".tailscale.ts.net"] {
         if !host_str.ends_with(suffix) {
             let fqdn = format!("{}{}", short, suffix);

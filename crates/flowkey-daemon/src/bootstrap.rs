@@ -74,7 +74,9 @@ pub(crate) async fn run_daemon_with_shutdown(
             error!("daemon runtime mutex poisoned: {}", e);
             anyhow!("daemon state unavailable")
         })?;
-        Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(&*guard)))
+        Arc::new(ArcSwap::from_pointee(RuntimeSnapshot::from_runtime(
+            &*guard,
+        )))
     };
     let suppression_state = Arc::new(AtomicBool::new(false));
     let session_senders: Arc<Mutex<HashMap<String, SessionSender>>> =
@@ -323,12 +325,10 @@ pub(crate) async fn run_daemon_with_shutdown(
         }
     }
     clear_status_snapshot(&status_path);
-    let runtime = runtime
-        .lock()
-        .map_err(|e| {
-            error!("daemon runtime mutex poisoned: {}", e);
-            anyhow!("daemon state unavailable")
-        })?;
+    let runtime = runtime.lock().map_err(|e| {
+        error!("daemon runtime mutex poisoned: {}", e);
+        anyhow!("daemon state unavailable")
+    })?;
     info!(sessions = runtime.sessions.len(), state = ?runtime.state, "daemon stopped");
 
     Ok(())

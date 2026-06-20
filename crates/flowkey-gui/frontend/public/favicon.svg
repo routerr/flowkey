@@ -1,14 +1,63 @@
 <svg width="48" height="48" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Background with gradient -->
   <rect width="1024" height="1024" rx="204" fill="url(#gradient)"/>
-  <!-- White keyboard symbol -->
-  <text x="512" y="600" font-family="Arial, sans-serif" font-size="512" font-weight="bold" text-anchor="middle" fill="white">⌨</text>
-  
-  <!-- Gradient definition -->
+
+  <g fill="white" stroke="white" stroke-linejoin="round">
+    <rect x="104" y="334" width="816" height="356" rx="58" fill="none" stroke-width="54"/>
+
+    <g stroke="none">
+      <rect x="165" y="385" width="37" height="42" rx="7"/>
+      <rect x="220" y="385" width="37" height="42" rx="7"/>
+      <rect x="275" y="385" width="37" height="42" rx="7"/>
+      <rect x="330" y="385" width="37" height="42" rx="7"/>
+      <rect x="385" y="385" width="37" height="42" rx="7"/>
+      <rect x="440" y="385" width="37" height="42" rx="7"/>
+      <rect x="495" y="385" width="37" height="42" rx="7"/>
+      <rect x="550" y="385" width="37" height="42" rx="7"/>
+      <rect x="605" y="385" width="37" height="42" rx="7"/>
+      <rect x="660" y="385" width="37" height="42" rx="7"/>
+      <rect x="715" y="385" width="37" height="42" rx="7"/>
+      <rect x="770" y="385" width="37" height="42" rx="7"/>
+      <rect x="825" y="385" width="37" height="42" rx="7"/>
+
+      <rect x="175" y="445" width="37" height="42" rx="7"/>
+      <rect x="230" y="445" width="37" height="42" rx="7"/>
+      <rect x="285" y="445" width="37" height="42" rx="7"/>
+      <rect x="340" y="445" width="37" height="42" rx="7"/>
+      <rect x="395" y="445" width="37" height="42" rx="7"/>
+      <rect x="450" y="445" width="37" height="42" rx="7"/>
+      <rect x="505" y="445" width="37" height="42" rx="7"/>
+      <rect x="560" y="445" width="37" height="42" rx="7"/>
+      <rect x="615" y="445" width="37" height="42" rx="7"/>
+      <rect x="670" y="445" width="37" height="42" rx="7"/>
+      <rect x="725" y="445" width="37" height="42" rx="7"/>
+      <rect x="780" y="445" width="82" height="42" rx="7"/>
+
+      <rect x="190" y="505" width="37" height="42" rx="7"/>
+      <rect x="245" y="505" width="37" height="42" rx="7"/>
+      <rect x="300" y="505" width="37" height="42" rx="7"/>
+      <rect x="355" y="505" width="37" height="42" rx="7"/>
+      <rect x="410" y="505" width="37" height="42" rx="7"/>
+      <rect x="465" y="505" width="37" height="42" rx="7"/>
+      <rect x="520" y="505" width="37" height="42" rx="7"/>
+      <rect x="575" y="505" width="37" height="42" rx="7"/>
+      <rect x="630" y="505" width="37" height="42" rx="7"/>
+      <rect x="685" y="505" width="37" height="42" rx="7"/>
+      <rect x="740" y="505" width="122" height="42" rx="7"/>
+
+      <rect x="175" y="565" width="37" height="42" rx="7"/>
+      <rect x="230" y="565" width="37" height="42" rx="7"/>
+      <rect x="285" y="565" width="37" height="42" rx="7"/>
+      <rect x="357" y="565" width="310" height="42" rx="7"/>
+      <rect x="702" y="565" width="37" height="42" rx="7"/>
+      <rect x="757" y="565" width="37" height="42" rx="7"/>
+      <rect x="812" y="565" width="37" height="42" rx="7"/>
+    </g>
+  </g>
+
   <defs>
-    <linearGradient id="gradient" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#a78bfa"/>
-      <stop offset="1" stop-color="#6366f1"/>
+    <linearGradient id="gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#B18CFF"/>
+      <stop offset="1" stop-color="#635BEE"/>
     </linearGradient>
   </defs>
 </svg>

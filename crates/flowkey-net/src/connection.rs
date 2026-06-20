@@ -533,7 +533,9 @@ pub fn session_channel_with_coalesce_window(
     let (sender, receiver) = bounded(100);
     let inner = SessionSenderInner::new(sender, Duration::from_millis(coalesce_window_ms));
     (
-        SessionSender { inner: Arc::clone(&inner) },
+        SessionSender {
+            inner: Arc::clone(&inner),
+        },
         SessionCommandReceiver {
             inner: receiver,
             channel_closed: Arc::clone(&inner.channel_closed),
@@ -838,21 +840,19 @@ pub async fn run_authenticated_session(
     let (bridge_tx, mut bridge_rx) = channel(100);
 
     // Spawn a blocking task to bridge crossbeam channel to tokio
-    tokio::task::spawn_blocking(move || {
-        loop {
-            match outbound.recv_timeout(Duration::from_millis(100)) {
-                Ok(command) => {
-                    if bridge_tx.blocking_send(command).is_err() {
-                        break;
-                    }
+    tokio::task::spawn_blocking(move || loop {
+        match outbound.recv_timeout(Duration::from_millis(100)) {
+            Ok(command) => {
+                if bridge_tx.blocking_send(command).is_err() {
+                    break;
                 }
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                    if bridge_tx.is_closed() {
-                        break;
-                    }
-                }
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                if bridge_tx.is_closed() {
+                    break;
+                }
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
     });
 
@@ -980,18 +980,18 @@ mod tests {
 
     use super::{
         accept_and_authenticate, authenticate_trusted_peer, connect_and_authenticate,
-        run_authenticated_session, session_channel, AuthenticatedConnection, ConnectionInfo,
-        SessionCommand,
+        run_authenticated_session, session_channel, session_channel_with_coalesce_window,
+        AuthenticatedConnection, ConnectionInfo, SessionCommand,
     };
 
     struct NoopSink;
 
     impl flowkey_input::InputEventSink for NoopSink {
-        fn handle(&mut self, _event: &flowkey_input::event::InputEvent) -> anyhow::Result<()> {
+        fn handle(&mut self, _event: &flowkey_input::event::InputEvent) -> Result<(), String> {
             Ok(())
         }
 
-        fn release_all(&mut self) -> anyhow::Result<()> {
+        fn release_all(&mut self) -> Result<(), String> {
             Ok(())
         }
     }
@@ -1347,7 +1347,10 @@ mod tests {
     fn configured_window_is_stored_on_sender() {
         let (sender, _receiver) = session_channel_with_coalesce_window(25);
 
-        assert_eq!(sender.inner.coalesce_window, Duration::from_millis(25));
+        assert_eq!(
+            sender.inner.coalesce_window,
+            std::time::Duration::from_millis(25)
+        );
     }
 
     #[test]

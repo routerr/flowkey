@@ -34,8 +34,7 @@ impl DaemonCommand {
     where
         S: AsyncWriteExt + Unpin,
     {
-        let payload =
-            serde_json::to_vec(self).context("failed to serialize daemon command")?;
+        let payload = serde_json::to_vec(self).context("failed to serialize daemon command")?;
         let len = payload.len() as u32;
         stream
             .write_u32(len)
@@ -67,8 +66,7 @@ impl DaemonCommand {
             .await
             .context("failed to read command payload")?;
 
-        let command =
-            serde_json::from_slice(&payload).context("failed to deserialize command")?;
+        let command = serde_json::from_slice(&payload).context("failed to deserialize command")?;
         Ok(command)
     }
 

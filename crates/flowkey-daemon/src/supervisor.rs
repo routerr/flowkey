@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -22,15 +22,33 @@ impl DaemonHandle {
     pub async fn shutdown(&self) {
         self.shutdown.cancel();
 
-        // The supervisor owns its own Tokio runtime on a dedicated thread.
-        // Cancelling the token above signals it to wind down; we detach the
-        // thread here rather than joining it so we do not depend on whichever
-        // runtime the caller happens to be running under.
-        let _ = self
+        let join_handle = self
             .thread_handle
             .lock()
             .expect("daemon handle mutex")
             .take();
+
+        if let Some(join_handle) = join_handle {
+            let (tx, rx) = mpsc::channel();
+            thread::Builder::new()
+                .name("flowkey-daemon-shutdown-join".into())
+                .spawn(move || {
+                    let joined = join_handle.join().is_ok();
+                    let _ = tx.send(joined);
+                })
+                .expect("failed to spawn daemon shutdown join thread");
+
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(true) => {}
+                Ok(false) => warn!("daemon supervisor thread panicked during shutdown"),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    warn!("timed out waiting for daemon supervisor thread to stop")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    warn!("daemon supervisor shutdown join thread disconnected")
+                }
+            }
+        }
 
         self.running.store(false, Ordering::SeqCst);
     }

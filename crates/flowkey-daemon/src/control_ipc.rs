@@ -445,8 +445,12 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(old_peer).expect("should authenticate");
-            runtime.mark_authenticated(new_peer).expect("should authenticate");
+            runtime
+                .mark_authenticated(old_peer)
+                .expect("should authenticate");
+            runtime
+                .mark_authenticated(new_peer)
+                .expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
         {
@@ -503,7 +507,9 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id).expect("should authenticate");
+            runtime
+                .mark_authenticated(peer_id)
+                .expect("should authenticate");
             runtime.toggle_controller().expect("should enter control");
         }
         session_senders
@@ -562,7 +568,9 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(controller_peer).expect("should authenticate");
+            runtime
+                .mark_authenticated(controller_peer)
+                .expect("should authenticate");
             runtime
                 .mark_controlled_by(controller_peer)
                 .expect("should enter controlled-by");
@@ -643,7 +651,9 @@ mod tests {
             let mut runtime = runtime
                 .lock()
                 .expect("daemon runtime mutex should not be poisoned");
-            runtime.mark_authenticated(peer_id).expect("should authenticate");
+            runtime
+                .mark_authenticated(peer_id)
+                .expect("should authenticate");
         }
         session_senders
             .lock()

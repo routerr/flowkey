@@ -54,7 +54,10 @@ impl DaemonRuntime {
         }
     }
 
-    pub fn mark_authenticated(&mut self, peer_id: impl Into<String>) -> Result<Option<Role>, String> {
+    pub fn mark_authenticated(
+        &mut self,
+        peer_id: impl Into<String>,
+    ) -> Result<Option<Role>, String> {
         let peer_id = peer_id.into();
         if peer_id.is_empty() {
             return Err("peer_id cannot be empty".to_string());
@@ -185,9 +188,14 @@ impl DaemonRuntime {
         }
         match self.sessions.get(&peer_id) {
             Some(session) if session.authenticated => {
-                if let DaemonState::Controlling { peer_id: current_peer } = &self.state {
+                if let DaemonState::Controlling {
+                    peer_id: current_peer,
+                } = &self.state
+                {
                     if current_peer != &peer_id {
-                        return Err("must release control before controlling different peer".to_string());
+                        return Err(
+                            "must release control before controlling different peer".to_string()
+                        );
                     }
                 }
                 self.active_peer_id = Some(peer_id.clone());
@@ -247,7 +255,9 @@ mod tests {
     fn authenticated_peer_becomes_active_peer() {
         let mut runtime = DaemonRuntime::new();
 
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
 
         assert_eq!(runtime.state, DaemonState::ConnectedIdle);
         assert_eq!(runtime.active_peer_id.as_deref(), Some("office-pc"));
@@ -267,7 +277,9 @@ mod tests {
     fn mark_authenticated_rejects_duplicate_peer() {
         let mut runtime = DaemonRuntime::new();
 
-        runtime.mark_authenticated("office-pc").expect("first authentication should succeed");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("first authentication should succeed");
         let result = runtime.mark_authenticated("office-pc");
 
         assert!(result.is_err());
@@ -277,7 +289,9 @@ mod tests {
     #[test]
     fn toggle_controller_switches_to_controlling_and_back() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
 
         runtime
             .toggle_controller()
@@ -305,9 +319,13 @@ mod tests {
     #[test]
     fn mark_disconnected_clears_active_peer_when_last_session_ends() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
 
-        runtime.mark_disconnected("office-pc").expect("should disconnect");
+        runtime
+            .mark_disconnected("office-pc")
+            .expect("should disconnect");
 
         assert_eq!(runtime.state, DaemonState::Disconnected);
         assert!(runtime.active_peer_id.is_none());
@@ -336,11 +354,17 @@ mod tests {
     #[test]
     fn disconnecting_other_peer_keeps_current_control_state() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
-        runtime.mark_authenticated("spare-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
+        runtime
+            .mark_authenticated("spare-pc")
+            .expect("should authenticate");
         runtime.toggle_controller().expect("should enter control");
 
-        runtime.mark_disconnected("spare-pc").expect("should disconnect");
+        runtime
+            .mark_disconnected("spare-pc")
+            .expect("should disconnect");
 
         assert_eq!(
             runtime.state,
@@ -354,11 +378,17 @@ mod tests {
     #[test]
     fn active_peer_disconnect_enters_recovering_for_resume() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
-        runtime.mark_authenticated("spare-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
+        runtime
+            .mark_authenticated("spare-pc")
+            .expect("should authenticate");
         runtime.toggle_controller().expect("should enter control");
 
-        runtime.mark_disconnected("office-pc").expect("should disconnect");
+        runtime
+            .mark_disconnected("office-pc")
+            .expect("should disconnect");
 
         assert_eq!(
             runtime.state,
@@ -374,11 +404,17 @@ mod tests {
     #[test]
     fn reconnecting_resume_peer_clears_recovery() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
         runtime.toggle_controller().expect("should enter control");
-        runtime.mark_disconnected("office-pc").expect("should disconnect");
+        runtime
+            .mark_disconnected("office-pc")
+            .expect("should disconnect");
 
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
 
         assert_eq!(runtime.state, DaemonState::ConnectedIdle);
         assert_eq!(runtime.active_peer_id.as_deref(), Some("office-pc"));
@@ -388,12 +424,20 @@ mod tests {
     #[test]
     fn authenticating_a_different_peer_while_recovering_keeps_recovery_state() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
-        runtime.mark_authenticated("spare-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
+        runtime
+            .mark_authenticated("spare-pc")
+            .expect("should authenticate");
         runtime.toggle_controller().expect("should enter control");
-        runtime.mark_disconnected("office-pc").expect("should disconnect");
+        runtime
+            .mark_disconnected("office-pc")
+            .expect("should disconnect");
 
-        runtime.mark_authenticated("backup-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("backup-pc")
+            .expect("should authenticate");
 
         assert_eq!(
             runtime.state,
@@ -410,10 +454,16 @@ mod tests {
     #[test]
     fn selecting_a_different_peer_during_recovery_exits_recovery() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
-        runtime.mark_authenticated("spare-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
+        runtime
+            .mark_authenticated("spare-pc")
+            .expect("should authenticate");
         runtime.toggle_controller().expect("should enter control");
-        runtime.mark_disconnected("office-pc").expect("should disconnect");
+        runtime
+            .mark_disconnected("office-pc")
+            .expect("should disconnect");
 
         runtime
             .select_active_peer("spare-pc")
@@ -438,8 +488,12 @@ mod tests {
     #[test]
     fn mark_controlled_by_rejects_different_controlling_peer() {
         let mut runtime = DaemonRuntime::new();
-        runtime.mark_authenticated("office-pc").expect("should authenticate");
-        runtime.mark_authenticated("spare-pc").expect("should authenticate");
+        runtime
+            .mark_authenticated("office-pc")
+            .expect("should authenticate");
+        runtime
+            .mark_authenticated("spare-pc")
+            .expect("should authenticate");
         runtime.toggle_controller().expect("should enter control");
 
         let result = runtime.mark_controlled_by("spare-pc");
