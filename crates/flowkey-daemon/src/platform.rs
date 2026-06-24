@@ -393,14 +393,18 @@ pub(crate) fn seed_platform_diagnostics(runtime: &Arc<Mutex<DaemonRuntime>>) {
     }
 }
 
+/// Maximum number of unique diagnostic notes retained in `DaemonRuntime`.
+/// Oldest entries are dropped once the cap is exceeded.
+const MAX_RUNTIME_NOTES: usize = 32;
+
 pub(crate) fn push_runtime_note(runtime: &mut DaemonRuntime, note: String) {
-    if !runtime
-        .diagnostics
-        .notes
-        .iter()
-        .any(|existing| existing == &note)
-    {
-        runtime.diagnostics.notes.push(note);
+    let notes = &mut runtime.diagnostics.notes;
+    if !notes.iter().any(|existing| existing == &note) {
+        notes.push(note);
+    }
+    if notes.len() > MAX_RUNTIME_NOTES {
+        let drop = notes.len() - MAX_RUNTIME_NOTES;
+        notes.drain(0..drop);
     }
 }
 
@@ -439,5 +443,32 @@ impl InputEventSink for LoggingInputSink {
 
     fn release_all(&mut self) -> Result<(), String> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{push_runtime_note, MAX_RUNTIME_NOTES};
+    use flowkey_core::daemon::DaemonRuntime;
+
+    #[test]
+    fn notes_capped_to_max_and_drops_oldest() {
+        let mut runtime = DaemonRuntime::new();
+        for i in 0..(MAX_RUNTIME_NOTES + 10) as u32 {
+            push_runtime_note(&mut runtime, format!("note-{i}"));
+        }
+        assert_eq!(runtime.diagnostics.notes.len(), MAX_RUNTIME_NOTES);
+        // oldest evicted, newest retained
+        assert!(runtime.diagnostics.notes.contains(&"note-41".to_string()));
+        assert!(!runtime.diagnostics.notes.contains(&"note-0".to_string()));
+    }
+
+    #[test]
+    fn notes_dedup_does_not_grow() {
+        let mut runtime = DaemonRuntime::new();
+        for _ in 0..5 {
+            push_runtime_note(&mut runtime, "same".to_string());
+        }
+        assert_eq!(runtime.diagnostics.notes.len(), 1);
     }
 }

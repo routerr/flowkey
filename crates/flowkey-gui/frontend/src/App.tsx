@@ -13,6 +13,7 @@ import {
 import './App.css'
 
 const CONTROL_RELEASE_GUARD_MS = 2000
+const MAX_DEBUG_EVENTS = 50
 
 /* ─── Status helpers ─── */
 function statusColor(state: string, healthy: boolean) {
@@ -102,7 +103,7 @@ function App() {
 
   useEffect(() => {
     const unlisten = event.listen<InputDebugEvent>('input-debug-event', (e) => {
-      setInputDebugEvents((events) => [...events, e.payload].slice(-80))
+      setInputDebugEvents((events) => [...events, e.payload].slice(-MAX_DEBUG_EVENTS))
     })
     return () => {
       unlisten.then(fn => fn())

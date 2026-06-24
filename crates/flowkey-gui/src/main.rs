@@ -546,6 +546,9 @@ fn init_tracing() {
         return;
     }
 
+    let log_path = log_dir.join("flowkey.log");
+    // Each launch starts with a fresh log; best-effort, ignore "not found".
+    let _ = std::fs::remove_file(&log_path);
     let file_appender = tracing_appender::rolling::never(&log_dir, "flowkey.log");
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(

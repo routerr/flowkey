@@ -4,5 +4,6 @@ dist/
 **/.DS_Store
 crates/.DS_Store
 daemon.log
+logs/
 
 .antigravitycli/
