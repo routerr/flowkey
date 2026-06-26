@@ -10,7 +10,14 @@ pub struct FrameHeader {
     pub message_type: u8,
 }
 
-pub async fn write_message(stream: &mut TcpStream, message: &Message) -> Result<()> {
+/// Size of the wire frame header: 4-byte big-endian payload length + 1-byte
+/// message type.
+const FRAME_HEADER_LEN: usize = 4 + 1;
+
+/// Writes a framed message and returns the total number of bytes written on the
+/// wire (header + payload), for throughput accounting. Callers that don't need
+/// the count can ignore the returned value.
+pub async fn write_message(stream: &mut TcpStream, message: &Message) -> Result<usize> {
     let payload = bincode::serialize(message).context("failed to serialize message")?;
     let payload_len: u32 = payload
         .len()
@@ -19,7 +26,7 @@ pub async fn write_message(stream: &mut TcpStream, message: &Message) -> Result<
 
     // Combine header + payload into a single write to avoid sending
     // multiple TCP segments when TCP_NODELAY is enabled.
-    let mut buf = Vec::with_capacity(4 + 1 + payload.len());
+    let mut buf = Vec::with_capacity(FRAME_HEADER_LEN + payload.len());
     buf.extend_from_slice(&payload_len.to_be_bytes());
     buf.push(message_type(message));
     buf.extend_from_slice(&payload);
@@ -29,10 +36,18 @@ pub async fn write_message(stream: &mut TcpStream, message: &Message) -> Result<
         .await
         .context("failed to write message")?;
 
-    Ok(())
+    Ok(buf.len())
 }
 
+/// Reads a framed message. See [`read_message_metered`] for the variant that
+/// also reports the on-wire byte count.
 pub async fn read_message(stream: &mut TcpStream) -> Result<Message> {
+    Ok(read_message_metered(stream).await?.0)
+}
+
+/// Reads a framed message and returns it alongside the total number of bytes
+/// consumed from the wire (header + payload), for throughput accounting.
+pub async fn read_message_metered(stream: &mut TcpStream) -> Result<(Message, usize)> {
     let payload_len = stream
         .read_u32()
         .await
@@ -54,7 +69,8 @@ pub async fn read_message(stream: &mut TcpStream) -> Result<Message> {
         return Err(anyhow!("message type header does not match payload"));
     }
 
-    Ok(message)
+    let wire_bytes = FRAME_HEADER_LEN + payload_len as usize;
+    Ok((message, wire_bytes))
 }
 
 fn message_type(message: &Message) -> u8 {

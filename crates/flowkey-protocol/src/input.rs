@@ -155,6 +155,19 @@ impl InputEvent {
             _ => false,
         }
     }
+
+    /// Capture-time wall-clock timestamp (microseconds since the UNIX epoch)
+    /// recorded by the sender. Synthetic events (e.g. hotkey-injected) use `0`.
+    pub fn timestamp_us(&self) -> u64 {
+        match self {
+            InputEvent::KeyDown { timestamp_us, .. }
+            | InputEvent::KeyUp { timestamp_us, .. }
+            | InputEvent::MouseMove { timestamp_us, .. }
+            | InputEvent::MouseButtonDown { timestamp_us, .. }
+            | InputEvent::MouseButtonUp { timestamp_us, .. }
+            | InputEvent::MouseWheel { timestamp_us, .. } => *timestamp_us,
+        }
+    }
 }
 
 #[cfg(test)]

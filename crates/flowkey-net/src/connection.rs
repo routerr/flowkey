@@ -16,8 +16,9 @@ use tokio::sync::mpsc::channel;
 use tokio::time::{interval, Duration};
 use tracing::{error, info, trace, warn};
 
-use crate::frame::{read_message, write_message};
+use crate::frame::{read_message, read_message_metered, write_message};
 use crate::heartbeat::HeartbeatConfig;
+use crate::metrics::SessionMetrics;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -857,6 +858,9 @@ pub async fn run_authenticated_session(
     });
 
     let mut ticker = interval(Duration::from_secs(heartbeat.interval_secs));
+    let mut metrics = SessionMetrics::from_env();
+    let metrics_enabled = metrics.is_enabled();
+    let mut metrics_ticker = interval(metrics.tick_interval());
     let mut outbound_open = true;
     let mut sequence: u64 = 0;
     let peer_id = connection.info.peer_id.clone();
@@ -866,25 +870,32 @@ pub async fn run_authenticated_session(
     loop {
         tokio::select! {
             biased;
+            _ = metrics_ticker.tick(), if metrics_enabled => {
+                metrics.maybe_flush(&peer_id);
+            }
             _ = ticker.tick() => {
-                write_message(stream, &Message::Heartbeat).await?;
+                let n = write_message(stream, &Message::Heartbeat).await?;
+                metrics.record_outbound(n);
             }
             maybe_command = bridge_rx.recv(), if outbound_open => {
                 match maybe_command {
                     Some(SessionCommand::Input(event)) => {
                         sequence = sequence.wrapping_add(1);
-                        write_message(stream, &Message::InputEvent { sequence, event }).await?;
+                        let n = write_message(stream, &Message::InputEvent { sequence, event }).await?;
+                        metrics.record_outbound(n);
                     }
                     Some(SessionCommand::SwitchControl { request_id }) => {
                         info!(peer = %peer_id, request = %request_id, "writing SwitchRequest to session stream");
-                        write_message(stream, &Message::SwitchRequest {
+                        let n = write_message(stream, &Message::SwitchRequest {
                             peer_id: local_node_id.to_string(),
                             request_id,
                         }).await?;
+                        metrics.record_outbound(n);
                     }
                     Some(SessionCommand::ReleaseControl { request_id }) => {
                         info!(peer = %peer_id, request = %request_id, "writing SwitchRelease to session stream");
-                        write_message(stream, &Message::SwitchRelease { request_id }).await?;
+                        let n = write_message(stream, &Message::SwitchRelease { request_id }).await?;
+                        metrics.record_outbound(n);
                     }
                     Some(SessionCommand::ReleaseAll) => {
                         info!(peer = %peer_id, "locally releasing all input state");
@@ -908,13 +919,14 @@ pub async fn run_authenticated_session(
                     }
                 }
             }
-            result = tokio::time::timeout(Duration::from_secs(heartbeat.timeout_secs), read_message(stream)) => {
-                let message = match result {
+            result = tokio::time::timeout(Duration::from_secs(heartbeat.timeout_secs), read_message_metered(stream)) => {
+                let (message, wire_bytes) = match result {
                     Ok(result) => result?,
                     Err(_) => {
                         return Err(anyhow!("heartbeat timeout for peer {}", peer_id));
                     }
                 };
+                metrics.record_inbound(wire_bytes);
 
                 match message {
                     Message::Heartbeat => {
@@ -922,9 +934,15 @@ pub async fn run_authenticated_session(
                     }
                     Message::InputEvent { sequence, event } => {
                         tracing::debug!(peer = %peer_id, sequence, event = ?event, "received input event");
+                        // End-to-end latency uses the sender's capture timestamp;
+                        // inject latency is measured locally and is exact.
+                        let capture_us = event.timestamp_us();
+                        let inject_start = Instant::now();
                         if let Err(error) = route_input_event(held_keys, sink, &event) {
                             warn!(peer = %peer_id, event = ?event, %error, "input injection failed, continuing session");
                         }
+                        metrics.record_inject(inject_start.elapsed());
+                        metrics.record_e2e(capture_us);
                     }
                     Message::SwitchRequest { peer_id: remote_peer, request_id } => {
                         info!(peer = %remote_peer, request = %request_id, "remote peer took control");
