@@ -253,8 +253,17 @@ async fn get_permission_status() -> Result<PermissionStatusView, String> {
 async fn open_permissions() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        flowkey_platform_macos::permissions::PermissionStatus::open_accessibility_pane()?;
-        flowkey_platform_macos::permissions::PermissionStatus::open_input_monitoring_pane()?;
+        use flowkey_platform_macos::permissions::PermissionStatus;
+        // Fire the native prompts first (they include an "Open System Settings"
+        // button). For anything still not granted — e.g. previously denied, so
+        // the prompt is suppressed — open the exact Settings pane as a fallback.
+        let status = PermissionStatus::request();
+        if !status.accessibility {
+            PermissionStatus::open_accessibility_pane()?;
+        }
+        if !status.input_monitoring {
+            PermissionStatus::open_input_monitoring_pane()?;
+        }
     }
 
     Ok(())
@@ -714,6 +723,18 @@ fn main() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
+
+            // On launch, fire the native permission prompts for anything still
+            // missing so the user gets a one-click "Open System Settings" dialog
+            // instead of having to discover the panes themselves.
+            #[cfg(target_os = "macos")]
+            {
+                use flowkey_platform_macos::permissions::PermissionStatus;
+                let status = PermissionStatus::probe();
+                if !status.accessibility || !status.input_monitoring {
+                    let _ = PermissionStatus::request();
+                }
+            }
 
             let app_handle = app.handle();
             #[cfg(target_os = "windows")]
