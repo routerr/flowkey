@@ -12,7 +12,9 @@
   },
   "tauri": {
     "allowlist": {
-      "all": true
+      "window": {
+        "setSize": true
+      }
     },
     "bundle": {
       "active": true,

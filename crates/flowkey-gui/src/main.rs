@@ -727,13 +727,23 @@ fn main() {
         })
         .system_tray(system_tray)
         .on_window_event(|event| {
-            if let WindowEvent::CloseRequested { .. } = event.event() {
-                // Let the window and its WebView be destroyed to free memory
-                // (the dominant consumer while hidden). The app keeps running in
-                // the tray via the ExitRequested handler, the embedded daemon is
-                // unaffected, and the window is recreated on demand from the tray.
-                #[cfg(target_os = "macos")]
-                set_activation_policy(tauri::ActivationPolicy::Accessory);
+            match event.event() {
+                WindowEvent::CloseRequested { .. } => {
+                    // Let the window and its WebView be destroyed to free memory
+                    // (the dominant consumer while hidden). The app keeps running
+                    // in the tray via the ExitRequested handler, the embedded
+                    // daemon is unaffected, and the window is recreated on demand.
+                    #[cfg(target_os = "macos")]
+                    set_activation_policy(tauri::ActivationPolicy::Accessory);
+                }
+                WindowEvent::Destroyed => {
+                    // The WebView is now gone; return our freed pages to the OS
+                    // so reported memory drops promptly while hidden. (The
+                    // WebView2 host processes are reclaimed on their own.)
+                    #[cfg(target_os = "windows")]
+                    flowkey_platform_windows::memory::trim_working_set();
+                }
+                _ => {}
             }
         })
         .on_system_tray_event(|app, event| match event {

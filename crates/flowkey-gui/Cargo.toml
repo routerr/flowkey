@@ -9,10 +9,15 @@ license = "MIT"
 [package.metadata.tauri-winres]
 
 [dependencies]
-tauri = { version = "1", features = ["system-tray", "api-all", "custom-protocol"] }
+# Narrowed from "api-all": the frontend only uses invoke + the event system
+# (both always available) plus window.setSize. Limiting the allowlist shrinks
+# the binary and the runtime API surface (security).
+tauri = { version = "1", features = ["system-tray", "window-set-size", "custom-protocol"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
+# Only the runtime/net/time/sync/macros features are used (TcpListener, sleep,
+# spawn); trimmed from "full".
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
