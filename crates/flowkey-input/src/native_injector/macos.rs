@@ -331,6 +331,14 @@ pub(super) fn post_key_event(
     code: &str,
     key_down: bool,
 ) -> Result<(), String> {
+    // Windows-style navigation remap: on macOS, Home/End scroll the document,
+    // but Windows users expect line start/end. Translate to Cmd+Left / Cmd+Right.
+    // Any held modifiers are already physically pressed by sync_modifiers, so
+    // Shift+Home naturally becomes Shift+Cmd+Left (select to line start).
+    if let Some((arrow_keycode, arrow_code)) = windows_nav_remap(code) {
+        return post_windows_nav_remap(sink, arrow_keycode, arrow_code, key_down);
+    }
+
     let Some(keycode) = key_code_to_macos_virtual(code) else {
         warn!(
             target: "keyboard_trace",
@@ -428,6 +436,62 @@ pub(super) fn post_key_event(
     // pipeline as physical keys. The loopback suppressor prevents the local
     // capture tap from forwarding our injected keys back to the controller.
     event.post(CGEventTapLocation::HID);
+    Ok(())
+}
+
+/// macOS virtual keycode (Command key) used to build the navigation chords.
+const MACOS_KEYCODE_COMMAND: CGKeyCode = 0x37; // MetaLeft
+
+/// Maps a Windows navigation key to the macOS arrow key it should become when
+/// wrapped with Command. Returns the arrow's virtual keycode and its protocol
+/// code string (for loopback bookkeeping). PageUp/PageDown are intentionally
+/// left native and return None.
+fn windows_nav_remap(code: &str) -> Option<(CGKeyCode, &'static str)> {
+    match code {
+        "Home" => Some((0x7B, "ArrowLeft")),  // beginning of line
+        "End" => Some((0x7C, "ArrowRight")),  // end of line
+        _ => None,
+    }
+}
+
+/// Inject a Cmd+Arrow chord for a remapped Home/End key. The chord is a
+/// complete press, so we act only on key-down and treat the matching key-up as
+/// a no-op. Currently-held modifiers (e.g. Shift, already pressed by
+/// sync_modifiers) are preserved, so Shift+Home selects to the line start.
+fn post_windows_nav_remap(
+    sink: &NativeInputSink,
+    arrow_keycode: CGKeyCode,
+    arrow_code: &str,
+    key_down: bool,
+) -> Result<(), String> {
+    if !key_down {
+        return Ok(());
+    }
+
+    let base_flags = build_modifier_flags(&sink.current_modifiers);
+    let with_command = base_flags | CGEventFlags::CGEventFlagCommand;
+    let mods_with_command = with_modifier_applied(sink.current_modifiers, "MetaLeft");
+
+    // Record the synthetic events so our own capture tap does not echo the
+    // injected Command/arrow keys back to the controller.
+    record_loopback_key_event(&sink.loopback, "MetaLeft", true, mods_with_command);
+    record_loopback_key_event(&sink.loopback, arrow_code, true, mods_with_command);
+    record_loopback_key_event(&sink.loopback, arrow_code, false, mods_with_command);
+    record_loopback_key_event(&sink.loopback, "MetaLeft", false, sink.current_modifiers);
+
+    debug!(
+        target: "keyboard_trace",
+        platform = sink.platform,
+        arrow_code = %arrow_code,
+        arrow_keycode,
+        shift = sink.current_modifiers.shift,
+        "remapping Windows Home/End to Cmd+Arrow on macOS"
+    );
+
+    post_macos_key_event(MACOS_KEYCODE_COMMAND, true, with_command)?;
+    post_macos_key_event(arrow_keycode, true, with_command)?;
+    post_macos_key_event(arrow_keycode, false, with_command)?;
+    post_macos_key_event(MACOS_KEYCODE_COMMAND, false, base_flags)?;
     Ok(())
 }
 
@@ -710,7 +774,8 @@ impl NativeInputSink {
 mod tests {
     use super::{
         build_modifier_flags, dock_cursor_zone, dock_proxy_transition, key_code_to_macos_virtual,
-        macos_posted_delta, modifier_flag_for_keycode, DockCursorZone, DockProxyAction,
+        macos_posted_delta, modifier_flag_for_keycode, windows_nav_remap, DockCursorZone,
+        DockProxyAction,
     };
     use crate::event::Modifiers;
     use core_graphics::event::CGEventFlags;
@@ -881,6 +946,17 @@ mod tests {
         assert_eq!(key_code_to_macos_virtual("End"), Some(0x77));
         assert_eq!(key_code_to_macos_virtual("PageUp"), Some(0x74));
         assert_eq!(key_code_to_macos_virtual("PageDown"), Some(0x79));
+    }
+
+    #[test]
+    fn windows_nav_remap_maps_home_end_to_arrows_and_leaves_others_native() {
+        // Home/End become Cmd+Left / Cmd+Right (line start/end).
+        assert_eq!(windows_nav_remap("Home"), Some((0x7B, "ArrowLeft")));
+        assert_eq!(windows_nav_remap("End"), Some((0x7C, "ArrowRight")));
+        // PageUp/PageDown and everything else keep native macOS behavior.
+        assert_eq!(windows_nav_remap("PageUp"), None);
+        assert_eq!(windows_nav_remap("PageDown"), None);
+        assert_eq!(windows_nav_remap("KeyA"), None);
     }
 
     #[test]
