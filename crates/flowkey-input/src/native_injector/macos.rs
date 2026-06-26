@@ -54,10 +54,55 @@ extern "C" {
     fn CFBooleanGetValue(boolean: *const c_void) -> bool;
 }
 
-/// Cycle to the next selectable keyboard input source, mimicking the system
-/// language-switch shortcut. Returns an error string if the platform APIs
-/// are unavailable or no alternative source exists.
+// Grand Central Dispatch (libSystem, always linked). Used to hop the Text Input
+// Sources work onto the main thread — TISCreateInputSourceList asserts it runs
+// on the main dispatch queue and traps the process otherwise, and input
+// injection runs on a tokio worker thread.
+extern "C" {
+    // `dispatch_get_main_queue()` is a C macro over this global symbol; we take
+    // its address directly.
+    static _dispatch_main_q: c_void;
+    fn dispatch_async_f(
+        queue: *const c_void,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
+}
+
+/// Switch to the next keyboard input source. The Text Input Sources API must
+/// run on the main thread (it asserts the main dispatch queue), but input
+/// injection runs on a tokio worker thread — so schedule the work on the main
+/// queue and return immediately. Fire-and-forget: we don't need the result and
+/// async avoids any risk of deadlocking against the main thread.
 pub(super) fn switch_input_source() -> Result<(), String> {
+    // SAFETY: `_dispatch_main_q` is libdispatch's global main-queue object;
+    // `switch_input_source_main` is a valid `extern "C"` callback taking the
+    // null context we pass.
+    unsafe {
+        dispatch_async_f(
+            &_dispatch_main_q as *const c_void,
+            std::ptr::null_mut(),
+            switch_input_source_main,
+        );
+    }
+    Ok(())
+}
+
+/// Main-queue trampoline: performs the actual input-source switch and logs any
+/// failure (there is no caller left to return an error to).
+extern "C" fn switch_input_source_main(_context: *mut c_void) {
+    if let Err(error) = perform_input_source_switch() {
+        debug!(
+            target: "keyboard_trace",
+            %error,
+            "input source switch did not change the active source"
+        );
+    }
+}
+
+/// Cycle to the next selectable keyboard input source, mimicking the system
+/// language-switch shortcut. Must be called on the main thread.
+fn perform_input_source_switch() -> Result<(), String> {
     // SAFETY: all calls follow the documented Text Input Sources contract.
     // Ownership: `TISCreateInputSourceList` and `TISCopyCurrentKeyboardInputSource`
     // return +1 references we must `CFRelease`; array elements are borrowed.
