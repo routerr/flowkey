@@ -42,7 +42,10 @@ pub struct SessionMetrics {
     window_start: Instant,
 
     inject_us: Vec<u32>,
-    e2e_us: Vec<u32>,
+    // Signed raw (now - capture) deltas in microseconds. Signed because the
+    // sender's clock may run ahead of ours; we subtract the per-window minimum
+    // at flush time to cancel the clock offset.
+    e2e_raw_us: Vec<i64>,
 
     inbound_events: u64,
     inbound_bytes: u64,
@@ -70,7 +73,7 @@ impl SessionMetrics {
             enabled: interval_secs > 0,
             window_start: Instant::now(),
             inject_us: Vec::new(),
-            e2e_us: Vec::new(),
+            e2e_raw_us: Vec::new(),
             inbound_events: 0,
             inbound_bytes: 0,
             outbound_messages: 0,
@@ -122,16 +125,22 @@ impl SessionMetrics {
             return;
         }
         if capture_timestamp_us == 0 {
+            // Synthetic event (e.g. hotkey-injected) carries no capture time.
             self.e2e_skipped = self.e2e_skipped.saturating_add(1);
             return;
         }
         let now_us = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_micros() as u64)
+            .map(|d| d.as_micros() as i64)
             .unwrap_or(0);
-        match now_us.checked_sub(capture_timestamp_us) {
-            Some(delta) => push_capped(&mut self.e2e_us, delta.min(u32::MAX as u64) as u32),
-            None => self.e2e_skipped = self.e2e_skipped.saturating_add(1),
+        // Keep the signed delta even when negative (sender clock ahead of ours).
+        // The per-window minimum is subtracted at flush time, cancelling any
+        // constant clock offset and leaving the real latency spread — so this
+        // works without NTP-synced clocks. (Previously negatives were dropped,
+        // which discarded almost every sample when the controller ran ahead.)
+        if self.e2e_raw_us.len() < MAX_SAMPLES {
+            self.e2e_raw_us
+                .push(now_us - capture_timestamp_us as i64);
         }
     }
 
@@ -164,7 +173,13 @@ impl SessionMetrics {
     fn flush(&mut self, peer_id: &str, elapsed: Duration) {
         let secs = elapsed.as_secs_f64().max(f64::MIN_POSITIVE);
         let inject = Percentiles::from_samples(&mut self.inject_us);
-        let e2e = Percentiles::from_samples(&mut self.e2e_us);
+        // e2e_* are offset-corrected: each window subtracts its own minimum
+        // delta, so they measure latency *spread* above the best case and are
+        // immune to a constant clock offset between hosts. e2e_offset_us is that
+        // subtracted baseline (raw now-capture min); it conflates the true
+        // best-case latency with the inter-host clock skew, so only its changes
+        // are meaningful, not its absolute value.
+        let (e2e, e2e_offset_us) = percentiles_offset_corrected(&mut self.e2e_raw_us);
 
         info!(
             peer = %peer_id,
@@ -181,8 +196,9 @@ impl SessionMetrics {
             e2e_p99_us = e2e.p99,
             e2e_max_us = e2e.max,
             e2e_n = e2e.count,
+            e2e_offset_us = e2e_offset_us,
             e2e_skipped = self.e2e_skipped,
-            "session metrics (e2e_* assume NTP-synced clocks; inject_* are local/exact)"
+            "session metrics (inject_* are local/exact; e2e_* are offset-corrected jitter, clock-skew safe)"
         );
 
         self.reset();
@@ -191,7 +207,7 @@ impl SessionMetrics {
     fn reset(&mut self) {
         self.window_start = Instant::now();
         self.inject_us.clear();
-        self.e2e_us.clear();
+        self.e2e_raw_us.clear();
         self.inbound_events = 0;
         self.inbound_bytes = 0;
         self.outbound_messages = 0;
@@ -224,6 +240,21 @@ impl Percentiles {
             count,
         }
     }
+}
+
+/// Computes offset-corrected percentiles from signed raw (now - capture)
+/// deltas: subtract the minimum so the result measures latency spread above the
+/// best observed case, independent of any constant clock offset between hosts.
+/// Returns the percentiles and the subtracted baseline (the raw minimum).
+fn percentiles_offset_corrected(samples: &mut [i64]) -> (Percentiles, i64) {
+    let Some(&offset) = samples.iter().min() else {
+        return (Percentiles::default(), 0);
+    };
+    let mut corrected: Vec<u32> = samples
+        .iter()
+        .map(|&d| (d - offset).clamp(0, u32::MAX as i64) as u32)
+        .collect();
+    (Percentiles::from_samples(&mut corrected), offset)
 }
 
 /// Nearest-rank percentile over a pre-sorted slice. `p` is in `0..=100`.
@@ -280,13 +311,23 @@ mod tests {
     }
 
     #[test]
-    fn e2e_skips_synthetic_and_skewed_samples() {
+    fn e2e_skips_only_synthetic_samples() {
         let mut m = SessionMetrics::new(10);
-        m.record_e2e(0); // synthetic
-        // Far-future capture timestamp => negative delta => skewed/skipped.
-        m.record_e2e(u64::MAX);
-        assert!(m.e2e_us.is_empty());
-        assert_eq!(m.e2e_skipped, 2);
+        m.record_e2e(0); // synthetic => skipped
+        m.record_e2e(1); // real capture (clock-skewed) => kept, not skipped
+        assert_eq!(m.e2e_skipped, 1);
+        assert_eq!(m.e2e_raw_us.len(), 1);
+    }
+
+    #[test]
+    fn e2e_offset_correction_cancels_constant_clock_skew() {
+        // Three samples with a large constant offset (e.g. sender clock ahead):
+        // the corrected percentiles should reflect only the spread (0, 5, 10).
+        let mut raw = vec![-1_000_000_i64, -1_000_000 + 5_000, -1_000_000 + 10_000];
+        let (p, offset) = percentiles_offset_corrected(&mut raw);
+        assert_eq!(offset, -1_000_000);
+        assert_eq!(p.max, 10_000);
+        assert_eq!(p.count, 3);
     }
 
     #[test]
