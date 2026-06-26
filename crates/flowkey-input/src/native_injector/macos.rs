@@ -16,6 +16,113 @@ extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> i32;
 }
 
+// --- macOS Text Input Sources (language switching) -------------------------
+//
+// A remote Caps Lock is treated as "switch input source" (e.g. ABC <-> 注音).
+// We deliberately switch via the Text Input Sources API rather than posting a
+// hardware Caps Lock key event: posting key code 0x39 would toggle the real
+// Caps Lock LED, which both fails to switch language reliably and breaks
+// Shift-to-uppercase (with Caps Lock on, Shift produces lowercase).
+use std::os::raw::c_void;
+
+type CFArrayRef = *const c_void;
+type CFStringRef = *const c_void;
+type TisInputSourceRef = *const c_void;
+
+// Carbon (HIToolbox) provides the Text Input Sources API. CoreFoundation is
+// already linked transitively via the `core-graphics` crate, so it needs no
+// explicit `#[link]` here.
+#[link(name = "Carbon", kind = "framework")]
+extern "C" {
+    fn TISCreateInputSourceList(properties: *const c_void, include_all_installed: bool)
+        -> CFArrayRef;
+    fn TISCopyCurrentKeyboardInputSource() -> TisInputSourceRef;
+    fn TISSelectInputSource(input_source: TisInputSourceRef) -> i32;
+    fn TISGetInputSourceProperty(
+        input_source: TisInputSourceRef,
+        property_key: CFStringRef,
+    ) -> *const c_void;
+
+    static kTISPropertyInputSourceIsSelectCapable: CFStringRef;
+    static kTISPropertyInputSourceCategory: CFStringRef;
+    static kTISCategoryKeyboardInputSource: CFStringRef;
+
+    fn CFArrayGetCount(array: CFArrayRef) -> isize;
+    fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
+    fn CFRelease(cf: *const c_void);
+    fn CFEqual(a: *const c_void, b: *const c_void) -> bool;
+    fn CFBooleanGetValue(boolean: *const c_void) -> bool;
+}
+
+/// Cycle to the next selectable keyboard input source, mimicking the system
+/// language-switch shortcut. Returns an error string if the platform APIs
+/// are unavailable or no alternative source exists.
+pub(super) fn switch_input_source() -> Result<(), String> {
+    // SAFETY: all calls follow the documented Text Input Sources contract.
+    // Ownership: `TISCreateInputSourceList` and `TISCopyCurrentKeyboardInputSource`
+    // return +1 references we must `CFRelease`; array elements are borrowed.
+    unsafe {
+        let list = TISCreateInputSourceList(std::ptr::null(), false);
+        if list.is_null() {
+            return Err("TISCreateInputSourceList returned null".to_string());
+        }
+
+        // Collect only keyboard sources that can actually be selected.
+        let count = CFArrayGetCount(list);
+        let mut selectable: Vec<TisInputSourceRef> = Vec::new();
+        for i in 0..count {
+            let source = CFArrayGetValueAtIndex(list, i);
+            if source.is_null() {
+                continue;
+            }
+            if is_selectable_keyboard_source(source) {
+                selectable.push(source);
+            }
+        }
+
+        if selectable.len() < 2 {
+            CFRelease(list);
+            return Err("no alternative input source to switch to".to_string());
+        }
+
+        let current = TISCopyCurrentKeyboardInputSource();
+        let current_idx = if current.is_null() {
+            None
+        } else {
+            selectable.iter().position(|&s| CFEqual(s, current))
+        };
+
+        // Advance to the next source, wrapping around. If we can't locate the
+        // current one, fall back to the first entry.
+        let next_idx = current_idx.map_or(0, |idx| (idx + 1) % selectable.len());
+        let status = TISSelectInputSource(selectable[next_idx]);
+
+        if !current.is_null() {
+            CFRelease(current);
+        }
+        CFRelease(list);
+
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(format!("TISSelectInputSource failed with status {status}"))
+        }
+    }
+}
+
+/// True if the input source is a keyboard source that can be selected by the
+/// user (excludes non-selectable layouts and palette/ink categories).
+///
+/// SAFETY: `source` must be a valid `TISInputSourceRef` borrowed from a list.
+unsafe fn is_selectable_keyboard_source(source: TisInputSourceRef) -> bool {
+    let select_capable = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsSelectCapable);
+    if select_capable.is_null() || !CFBooleanGetValue(select_capable) {
+        return false;
+    }
+    let category = TISGetInputSourceProperty(source, kTISPropertyInputSourceCategory);
+    !category.is_null() && CFEqual(category, kTISCategoryKeyboardInputSource)
+}
+
 pub(super) fn move_mouse(sink: &mut NativeInputSink, dx: i32, dy: i32) -> Result<(), String> {
     let current = match sink.cursor_position {
         Some(pos) => pos,
@@ -248,29 +355,28 @@ pub(super) fn post_key_event(
             .map_err(|error| error.to_string());
     };
 
-    // Treat remote CapsLock as the macOS language-switch key ("中/英" on
-    // Chinese keyboards). Do not synthesize AlphaShift here; that forces real
-    // Caps Lock instead of letting Input Sources handle the language toggle.
+    // Treat remote Caps Lock as "switch input source" (e.g. ABC <-> 注音).
+    // Switch via the Text Input Sources API instead of posting a hardware
+    // Caps Lock event: toggling real Caps Lock would leave it stuck on and
+    // break Shift-to-uppercase. Act once, on key-down; ignore the key-up.
     if keycode == 0x39 {
-        let mut flags = build_modifier_flags(&sink.current_modifiers);
-        if sink.caps_lock_active {
-            flags |= CGEventFlags::CGEventFlagAlphaShift;
+        if key_down {
+            match switch_input_source() {
+                Ok(()) => debug!(
+                    target: "keyboard_trace",
+                    platform = sink.platform,
+                    code = %code,
+                    "switched macOS input source for remote Caps Lock"
+                ),
+                Err(error) => warn!(
+                    target: "keyboard_trace",
+                    platform = sink.platform,
+                    code = %code,
+                    %error,
+                    "failed to switch macOS input source for remote Caps Lock"
+                ),
+            }
         }
-        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-            .map_err(|_| "failed to create macOS event source for language switch".to_string())?;
-        let event = CGEvent::new_keyboard_event(source, keycode, key_down)
-            .map_err(|_| "failed to create macOS language switch event".to_string())?;
-        event.set_flags(flags);
-        debug!(
-            target: "keyboard_trace",
-            platform = sink.platform,
-            code = %code,
-            macos_keycode = keycode,
-            pressed = key_down,
-            caps_lock_active = sink.caps_lock_active,
-            "posting macOS CapsLock as language-switch key at HID level"
-        );
-        event.post(CGEventTapLocation::HID);
         return Ok(());
     }
 
@@ -282,9 +388,6 @@ pub(super) fn post_key_event(
             flags |= modifier_flag;
         } else {
             flags &= !modifier_flag;
-        }
-        if sink.caps_lock_active {
-            flags |= CGEventFlags::CGEventFlagAlphaShift;
         }
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| "failed to create macOS event source for modifier event".to_string())?;
@@ -303,10 +406,7 @@ pub(super) fn post_key_event(
         return Ok(());
     }
 
-    let mut flags = build_modifier_flags(&sink.current_modifiers);
-    if sink.caps_lock_active {
-        flags |= CGEventFlags::CGEventFlagAlphaShift;
-    }
+    let flags = build_modifier_flags(&sink.current_modifiers);
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| "failed to create macOS event source for key event".to_string())?;
     let event = CGEvent::new_keyboard_event(source, keycode, key_down)

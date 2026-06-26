@@ -39,8 +39,6 @@ pub struct NativeInputSink {
     pub(crate) current_modifiers: Modifiers,
     loopback: Option<SharedLoopbackSuppressor>,
     #[cfg(target_os = "macos")]
-    pub(crate) caps_lock_active: bool,
-    #[cfg(target_os = "macos")]
     cursor_position: Option<(f64, f64)>,
     #[cfg(target_os = "macos")]
     last_dock_zone: DockCursorZone,
@@ -80,8 +78,6 @@ impl NativeInputSink {
             pressed_buttons: HashSet::new(),
             current_modifiers: Modifiers::none(),
             loopback,
-            #[cfg(target_os = "macos")]
-            caps_lock_active: false,
             #[cfg(target_os = "macos")]
             cursor_position: None,
             #[cfg(target_os = "macos")]
