@@ -17,12 +17,50 @@ use flowkey_platform_macos::control_ipc::connect_to_control_socket;
 #[cfg(target_os = "windows")]
 use flowkey_platform_windows::control_ipc::connect_to_control_pipe;
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{
     CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
-    SystemTrayMenuItem, WindowEvent,
+    SystemTrayMenuItem, WindowBuilder, WindowEvent, WindowUrl,
 };
+
+/// Set once the user chooses Quit, so the `ExitRequested` handler knows to allow
+/// the process to exit instead of keeping it alive in the tray.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// Window title kept in sync with tauri.conf.json so recreated windows match.
+const MAIN_WINDOW_TITLE: &str = "flowkey — seamless keyboard & mouse sharing";
+
+/// Show the manager window, recreating it (and its WebView) if it was destroyed
+/// while hidden to free memory. The embedded daemon runs independently of any
+/// window, so it is unaffected.
+fn show_or_create_main_window(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    set_activation_policy(tauri::ActivationPolicy::Regular);
+
+    if let Some(window) = app.get_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return;
+    }
+
+    match WindowBuilder::new(app, "main", WindowUrl::App("index.html".into()))
+        .title(MAIN_WINDOW_TITLE)
+        .inner_size(360.0, 300.0)
+        .resizable(true)
+        .fullscreen(false)
+        .build()
+    {
+        Ok(window) => {
+            let _ = window.set_focus();
+        }
+        Err(error) => {
+            tracing::warn!(%error, "failed to recreate main window");
+        }
+    }
+}
 use tauri_plugin_autostart::MacosLauncher;
 use tokio::net::TcpListener;
 
@@ -440,6 +478,10 @@ fn upsert_pairing_peer(config: &mut Config, proposal: PairingProposal) {
 }
 
 fn request_daemon_shutdown(app: tauri::AppHandle) {
+    // Mark a real quit so the ExitRequested handler lets the process exit
+    // (rather than keeping it alive in the tray as it does on window close).
+    QUITTING.store(true, Ordering::SeqCst);
+
     let handle = app
         .state::<AppState>()
         .daemon
@@ -670,13 +712,9 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_window("main") {
-                #[cfg(target_os = "macos")]
-                set_activation_policy(tauri::ActivationPolicy::Regular);
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            // A second launch focuses the existing window, recreating it if it
+            // was destroyed while hidden.
+            show_or_create_main_window(app);
         }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::AppleScript,
@@ -689,32 +727,25 @@ fn main() {
         })
         .system_tray(system_tray)
         .on_window_event(|event| {
-            if let WindowEvent::CloseRequested { api, .. } = event.event() {
-                api.prevent_close();
-                let window = event.window();
-                window.hide().unwrap();
+            if let WindowEvent::CloseRequested { .. } = event.event() {
+                // Let the window and its WebView be destroyed to free memory
+                // (the dominant consumer while hidden). The app keeps running in
+                // the tray via the ExitRequested handler, the embedded daemon is
+                // unaffected, and the window is recreated on demand from the tray.
                 #[cfg(target_os = "macos")]
                 set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
         })
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::DoubleClick { .. } => {
-                let window = app.get_window("main").unwrap();
-                #[cfg(target_os = "macos")]
-                set_activation_policy(tauri::ActivationPolicy::Regular);
-                window.show().unwrap();
-                window.set_focus().unwrap();
+                show_or_create_main_window(app);
             }
             SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
                 "quit" => {
                     request_daemon_shutdown(app.clone());
                 }
                 "open" => {
-                    let window = app.get_window("main").unwrap();
-                    #[cfg(target_os = "macos")]
-                    set_activation_policy(tauri::ActivationPolicy::Regular);
-                    window.show().unwrap();
-                    window.set_focus().unwrap();
+                    show_or_create_main_window(app);
                 }
                 _ => {}
             },
@@ -811,7 +842,16 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 let status_path = Config::status_path().unwrap();
                 loop {
-                    if status_path.exists() {
+                    // Only read status and emit while a window is actually
+                    // visible. When the window is hidden/destroyed there is no UI
+                    // to update, so this skips the per-second disk read + IPC +
+                    // JS work, idling cheaply until the window is shown again.
+                    let window_visible = status_handle
+                        .get_window("main")
+                        .and_then(|window| window.is_visible().ok())
+                        .unwrap_or(false);
+
+                    if window_visible && status_path.exists() {
                         if let Ok(status) = flowkey_core::DaemonStatus::load_from_path(&status_path)
                         {
                             let _ = status_handle.emit_all("daemon-status", status);
@@ -838,6 +878,17 @@ fn main() {
             switch_to_peer,
             release_control
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            // Closing the window destroys the WebView (freeing memory) but must
+            // not quit the app — it lives on in the tray so the daemon keeps
+            // running. A real quit (tray "Quit") sets QUITTING first and is
+            // allowed through.
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if !QUITTING.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
