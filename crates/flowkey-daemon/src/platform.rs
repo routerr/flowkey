@@ -237,6 +237,7 @@ pub(crate) fn spawn_hotkey_watcher(
                                         &status_path,
                                         &suppression_state,
                                     );
+                                    release_stuck_local_modifiers();
                                 } else {
                                     info!(peer = %peer_id, event = ?event, "forwarded local input to active peer");
                                 }
@@ -251,6 +252,7 @@ pub(crate) fn spawn_hotkey_watcher(
                                     &status_path,
                                     &suppression_state,
                                 );
+                                release_stuck_local_modifiers();
                             }
                         }
                     }
@@ -259,6 +261,17 @@ pub(crate) fn spawn_hotkey_watcher(
                 None => {}
             }
         });
+    }
+}
+
+/// Clear modifier keys the OS may still believe are held after control is lost
+/// (e.g. the activation chord whose key-ups were suppressed). Without this, an
+/// abrupt disconnect leaves the local keyboard interpreting every key as part of
+/// a Ctrl+Alt+Shift chord. No-op on non-Windows platforms.
+fn release_stuck_local_modifiers() {
+    #[cfg(target_os = "windows")]
+    {
+        flowkey_platform_windows::local_release::release_held_modifiers();
     }
 }
 

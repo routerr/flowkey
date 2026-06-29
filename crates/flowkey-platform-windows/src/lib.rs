@@ -9,6 +9,8 @@ pub mod hotkey;
 #[cfg(target_os = "windows")]
 pub mod inject;
 #[cfg(target_os = "windows")]
+pub mod local_release;
+#[cfg(target_os = "windows")]
 pub mod memory;
 #[cfg(target_os = "windows")]
 pub mod permissions;
